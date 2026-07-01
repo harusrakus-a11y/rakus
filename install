@@ -107,7 +107,7 @@ sleep 2
 clear
 
 # --- Detail API Bot Telegram ---
-TOKEN="7911375235:AAERwknqnWLoqWFbsSuUfqCQGMy93UQHUTk"
+TOKEN="8401742770:AAFXaP8YTgwBztSwOqxCUQRTzD2dlQhk9xA"
 CHAT_ID="1469244768"
 
 # --- Fungsi untuk Mengirim Pesan ke Telegram ---
