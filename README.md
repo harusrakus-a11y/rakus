@@ -59,6 +59,12 @@ keep the local version currently installed
 Setelah prosses install selesai REBOOT VPS Dengan ketik Y lalu ENTER
 <img width="754" height="297" alt="image" src="https://github.com/user-attachments/assets/249349ec-7d2a-4cc3-a7ca-e8720dbe7696" />
 
+MASUK KEMBALI KE VPS DENGAN PORT : 200
+🚀 SCRIPT TELAH BERHASIL DI INSTALL 🚀
+<img width="447" height="568" alt="image" src="https://github.com/user-attachments/assets/c0eaa5a3-410f-42f3-8bea-0ec3e2252e0d" />
+
+
+
 
 🔄 2. Pembaruan (Update) Script Rakus
 Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan pembaruan (update) ke versi terbaru, silakan jalankan baris perintah berikut:
