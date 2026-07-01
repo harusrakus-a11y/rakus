@@ -51,5 +51,6 @@ Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan 
 ```
 cd /root
 rm -f update.sh
-wget [https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/update.sh](https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/update.sh) && chmod +x update.sh && ./update.sh
+wget https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/update.sh && chmod +x update.sh && ./update.sh
+
 ```
