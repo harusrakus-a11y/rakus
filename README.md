@@ -80,3 +80,16 @@ rm -f update.sh
 wget https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/update.sh && chmod +x update.sh && ./update.sh
 
 ```
+
+
+## 🎥 Video Tutorial Lengkap
+
+Untuk panduan visual langkah demi langkah yang lebih mudah dipahami, silakan tonton video tutorial instalasi VPS Debian berikut ini. 
+
+*(Klik gambar di bawah ini untuk memutar video)*
+
+<div align="center">
+  <a href="https://youtu.be/fb1Q07iT42w" target="_blank">
+    <img src="https://img.youtube.com/vi/fb1Q07iT42w/maxresdefault.jpg" alt="TUTORIAL LENGKAP INSTALLASI VPS DEBIAN" width="800" style="border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2);">
+  </a>
+</div>
