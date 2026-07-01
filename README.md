@@ -60,6 +60,9 @@ Setelah prosses install selesai REBOOT VPS Dengan ketik Y lalu ENTER
 <img width="754" height="297" alt="image" src="https://github.com/user-attachments/assets/249349ec-7d2a-4cc3-a7ca-e8720dbe7696" />
 
 MASUK KEMBALI KE VPS DENGAN PORT : 200
+<img width="704" height="114" alt="image" src="https://github.com/user-attachments/assets/0b3d795b-5670-4279-bd86-58390fb59722" />
+
+
 🚀 SCRIPT TELAH BERHASIL DI INSTALL 🚀
 <img width="447" height="568" alt="image" src="https://github.com/user-attachments/assets/c0eaa5a3-410f-42f3-8bea-0ec3e2252e0d" />
 
