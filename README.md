@@ -42,7 +42,7 @@ apt install curl jq wget screen build-essential -y && reboot
 Setelah VPS kembali menyala dan Anda berhasil login ulang, jalankan satu baris perintah di bawah ini untuk memulai proses instalasi otomatis:
 
 ```
-wget -q [https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install](https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install) && chmod +x install && ./install
+wget -q https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install && chmod +x install && ./install
 ```
 </b>
 
