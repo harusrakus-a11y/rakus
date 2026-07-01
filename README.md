@@ -4,7 +4,7 @@ Selamat datang di panduan instalasi resmi **Rakus Script**. Untuk memastikan scr
 
 ---
 
- ⚠️ Persyaratan Awal (Prerequisites)
+### ⚠️ Persyaratan Awal (Prerequisites)
 
 Sebelum melakukan instalasi apa pun di dalam VPS, pastikan Anda telah menyelesaikan dua langkah wajib berikut:
 
@@ -38,7 +38,7 @@ Langkah 2: Pemasangan Paket & Mulai Ulang (Reboot)
 apt install curl jq wget screen build-essential -y && reboot
 ```
 
-⚡ 1. Instalasi Script Rakus
+###⚡ 1. Instalasi Script Rakus
 Setelah VPS kembali menyala dan Anda berhasil login ulang, jalankan satu baris perintah di bawah ini untuk memulai proses instalasi otomatis:
 
 ```
