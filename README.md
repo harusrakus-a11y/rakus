@@ -46,6 +46,9 @@ wget -q https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/
 ```
 </b>
 
+Masukan Nama VPS :
+<img width="883" height="254" alt="image" src="https://github.com/user-attachments/assets/060c633a-ddd3-4fdd-872a-a574d31f114b" />
+
 🔄 2. Pembaruan (Update) Script Rakus
 Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan pembaruan (update) ke versi terbaru, silakan jalankan baris perintah berikut:
 
