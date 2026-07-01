@@ -4,7 +4,7 @@ Selamat datang di panduan instalasi resmi **Rakus Script**. Untuk memastikan scr
 
 ---
 
-## ⚠️ Persyaratan Awal (Prerequisites)
+ ⚠️ Persyaratan Awal (Prerequisites)
 
 Sebelum melakukan instalasi apa pun di dalam VPS, pastikan Anda telah menyelesaikan dua langkah wajib berikut:
 
