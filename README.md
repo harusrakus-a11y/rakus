@@ -56,6 +56,9 @@ Pilih Yang tanda merah ENTER :
 keep the local version currently installed 
 <img width="1077" height="522" alt="image" src="https://github.com/user-attachments/assets/c9e3e0fc-d14d-444e-8505-2d8381e7d94b" />
 
+Setelah prosses install selesai REBOOT VPS Dengan ketik Y lalu ENTER
+<img width="754" height="297" alt="image" src="https://github.com/user-attachments/assets/249349ec-7d2a-4cc3-a7ca-e8720dbe7696" />
+
 
 🔄 2. Pembaruan (Update) Script Rakus
 Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan pembaruan (update) ke versi terbaru, silakan jalankan baris perintah berikut:
