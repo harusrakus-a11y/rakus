@@ -68,26 +68,30 @@ while true; do
     # Menggunakan curl untuk memeriksa apakah client_name ada dalam file permission.txt
     permission_file=$(curl -s https://raw.githubusercontent.com/harusrakus-a11y/ijin/refs/heads/main/akses)
     
-    # Mengambil IP_VPS juga untuk validasi di izin.txt
-    IP_VPS=$(curl -s https://ipinfo.io/ip) # Pastikan ini mengambil IP publik
+# Mengambil IP_VPS juga untuk validasi di izin.txt
+IP_VPS=$(curl -s https://ipinfo.io/ip) # Pastikan ini mengambil IP publik
 
-    if echo "$permission_file" | grep -q -i "$client_name" && echo "$permission_file" | grep -q "$IP_VPS"; then
-        # Mengambil tanggal kedaluwarsa dari kolom ke-3
-        exp_date=$(echo "$permission_file" | grep -i "$client_name" | awk '{print $3}')
-        
-        # Validasi format tanggal
-        if ! [[ "$exp_date" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
-            echo -e "${red}❌ Format tanggal invalid: '$exp_date' (harus YYYY-MM-DD)${NC}"
-            exit 1
-        fi
+# Menggunakan awk untuk mencari baris yang kolom ke-2 persis $client_name dan kolom ke-4 persis $IP_VPS
+matched_line=$(echo "$permission_file" | awk -v client="$client_name" -v ip="$IP_VPS" '$2 == client && $4 == ip {print $0}')
 
-        # Validasi tanggal menggunakan date
-        if ! date -d "$exp_date" "+%s" &>/dev/null; then
-            echo -e "${red}❌ Tanggal tidak valid secara kalender: $exp_date${NC}"
-            exit 1
-        fi
+# Jika matched_line tidak kosong (artinya client dan IP cocok pada baris yang sama)
+if [[ -n "$matched_line" ]]; then
+    # Mengambil tanggal kedaluwarsa dari kolom ke-3 pada baris yang sudah valid
+    exp_date=$(echo "$matched_line" | awk '{print $3}')
+    
+    # Validasi format tanggal
+    if ! [[ "$exp_date" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
+        echo -e "${red}❌ Format tanggal invalid: '$exp_date' (harus YYYY-MM-DD)${NC}"
+        exit 1
+    fi
 
-        echo "Client Name accepted... Let's go..."
+    # Validasi tanggal menggunakan date
+    if ! date -d "$exp_date" "+%s" &>/dev/null; then
+        echo -e "${red}❌ Tanggal tidak valid secara kalender: $exp_date${NC}"
+        exit 1
+    fi
+
+    echo "Client Name accepted... Let's go..."
         break
     else
         echo -e "${red}❌ Client Name atau IP ($IP_VPS) tidak terdaftar!${NC}"
