@@ -8,13 +8,13 @@ Selamat datang di panduan instalasi resmi **Rakus Script**. Untuk memastikan scr
 
 Sebelum melakukan instalasi apa pun di dalam VPS, pastikan Anda telah menyelesaikan dua langkah wajib berikut:
 
-### 🌐 1. Pointing Domain ke IP VPS
+🌐 1. Pointing Domain ke IP VPS
 Pastikan domain yang akan Anda gunakan sudah di-pointing secara benar ke Alamat IP VPS Anda.
 > **Contoh konfigurasi pointing:**
 > 
 > <img width="774" height="446" alt="Pointing Domain" src="https://github.com/user-attachments/assets/2b8d89a9-fb02-4e6c-8b76-92493ee86df4" />
 
-### 🛡️ 2. Pendaftaran IP VPS
+🛡️ 2. Pendaftaran IP VPS
 Pastikan Alamat IP VPS Anda telah didaftarkan dan berstatus aktif pada sistem kami.
 > **Contoh pendaftaran IP:**
 > 
@@ -22,7 +22,7 @@ Pastikan Alamat IP VPS Anda telah didaftarkan dan berstatus aktif pada sistem ka
 
 ---
 
-## ⚙️ Persiapan OS (Ubuntu / Debian)
+ ⚙️ Persiapan OS (Ubuntu / Debian)
 
 Sebelum memasang script, sistem operasi pada VPS harus diperbarui dan dilengkapi dengan paket dasar yang dibutuhkan. Jalankan perintah berikut secara berurutan:
 
@@ -38,7 +38,7 @@ Langkah 2: Pemasangan Paket & Mulai Ulang (Reboot)
 apt install curl jq wget screen build-essential -y && reboot
 ```
 
-### ⚡ 1. Instalasi Script Rakus
+###⚡ 1. Instalasi Script Rakus
 Setelah VPS kembali menyala dan Anda berhasil login ulang, jalankan satu baris perintah di bawah ini untuk memulai proses instalasi otomatis:
 
 ```
