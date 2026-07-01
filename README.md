@@ -38,13 +38,13 @@ Langkah 2: Pemasangan Paket & Mulai Ulang (Reboot)
 apt install curl jq wget screen build-essential -y && reboot
 ```
 
-###⚡ 1. Instalasi Script Rakus
+### <b>⚡ 1. Instalasi Script Rakus
 Setelah VPS kembali menyala dan Anda berhasil login ulang, jalankan satu baris perintah di bawah ini untuk memulai proses instalasi otomatis:
 
 ```
 wget -q [https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install](https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install) && chmod +x install && ./install
 ```
-
+</b?
 🔄 2. Pembaruan (Update) Script Rakus
 Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan pembaruan (update) ke versi terbaru, silakan jalankan baris perintah berikut:
 
