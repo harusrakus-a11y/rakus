@@ -52,6 +52,10 @@ Masukan Nama VPS :
 Masukan Nama Domain Yang sudah di pointing :
 <img width="885" height="192" alt="image" src="https://github.com/user-attachments/assets/13749588-46bf-4a7a-8d13-f6694951f9d5" />
 
+Pilih Yang tanda merah ENTER :
+keep the local version currently installed 
+<img width="1077" height="522" alt="image" src="https://github.com/user-attachments/assets/c9e3e0fc-d14d-444e-8505-2d8381e7d94b" />
+
 
 🔄 2. Pembaruan (Update) Script Rakus
 Bagi Anda yang sudah menginstal script ini sebelumnya dan hanya ingin melakukan pembaruan (update) ke versi terbaru, silakan jalankan baris perintah berikut:
