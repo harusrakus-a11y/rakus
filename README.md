@@ -16,6 +16,7 @@ Pastikan domain yang akan Anda gunakan sudah di-pointing secara benar ke Alamat 
 
 🛡️ 2. Pendaftaran IP VPS
 Pastikan Alamat IP VPS Anda telah didaftarkan dan berstatus aktif pada sistem kami.
+LINK IJIN AKSES : https://github.com/harusrakus-a11y/ijin/blob/main/akses
 > **Contoh pendaftaran IP:**
 > 
 > <img width="1033" height="362" alt="Register IP" src="https://github.com/user-attachments/assets/092b5fca-824c-48e2-ae97-18fd8c15f724" />
