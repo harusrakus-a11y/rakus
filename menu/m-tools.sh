@@ -1,8 +1,10 @@
 #!/bin/bash
-# m-tools - Tools tambahan (ringkasan, cari, nota, peringatan, kesihatan VPS)
+# m-tools - Tools tambahan (ringkasan, cari, nota, peringatan, kesihatan, pantau servis, backup, pindah akaun)
 # Developer by kancil ecem
 #   m-tools           -> menu
 #   m-tools remind    -> hantar peringatan ke Telegram (untuk cron)
+#   m-tools jaga      -> semak servis, hidupkan semula yang mati (untuk cron)
+#   m-tools backup    -> hantar backup akaun ke Telegram (untuk cron)
 
 THEME_DIR="/etc/phreakers/theme"
 KDIR="/etc/kancil"
@@ -412,15 +414,376 @@ t_kesihatan() {
     kn_pause
 }
 
+# ---------- 6) PANTAU SERVIS (alert Telegram + hidup semula) ----------
+JAGA_DIR="$KDIR/jaga"
+JAGA_LOG="$KDIR/jaga.log"
+JAGA_CRON="/etc/cron.d/kancil-jaga"
+JAGA_SVCS="xray nginx ssh dropbear stunnel4 ws-stunnel"
+jaga_log() {
+    echo "$(date '+%F %T') $*" >> "$JAGA_LOG" 2>/dev/null
+    if [ "$(wc -l < "$JAGA_LOG" 2>/dev/null || echo 0)" -gt 200 ]; then
+        tail -n 100 "$JAGA_LOG" > "$JAGA_LOG.t" 2>/dev/null && mv "$JAGA_LOG.t" "$JAGA_LOG"
+    fi
+}
+jaga_tg() {   # tajuk servis baris
+    [ -z "$CHATID" ] || [ -z "$KEY" ] && return 1
+    kn_send "$(printf '%s\n' "✦ <b>KANCIL ECEM</b> ✦" "<b>$(kn_esc "$1")</b>" "━━━━━━━━━━━━━━━━" "Servis : <code>$(kn_esc "$2")</code>" "$(kn_esc "$3")" "Server : $(kn_esc "${domain:-$(hostname)}")" "Masa   : $(date '+%F %T')")"
+}
+# dipanggil cron setiap 2 minit. Servis yang "enabled" tapi mati: hidupkan semula.
+# Gagal hidup: cuba lagi selepas 10 minit sahaja. Mesej Telegram dihadkan supaya tak spam.
+jaga_run() {
+    local s now last t first
+    mkdir -p "$JAGA_DIR" 2>/dev/null
+    now=$(date +%s)
+    for s in $JAGA_SVCS; do
+        systemctl is-enabled --quiet "$s" 2>/dev/null || continue
+        if systemctl is-active --quiet "$s" 2>/dev/null; then
+            if [ -f "$JAGA_DIR/$s.gagal" ]; then
+                rm -f "$JAGA_DIR/$s.gagal"
+                jaga_log "$s pulih"
+                jaga_tg "SERVIS PULIH" "$s" "Dah hidup semula."
+            fi
+            continue
+        fi
+        if [ -f "$JAGA_DIR/$s.gagal" ]; then
+            last=$(cat "$JAGA_DIR/$s.gagal" 2>/dev/null); [[ "$last" =~ ^[0-9]+$ ]] || last=0
+            [ $(( now - last )) -lt 600 ] && continue
+        fi
+        systemctl restart "$s" >/dev/null 2>&1
+        sleep 4
+        if systemctl is-active --quiet "$s" 2>/dev/null; then
+            jaga_log "$s mati, dihidupkan semula"
+            t=0; [ -f "$JAGA_DIR/$s.msg" ] && t=$(cat "$JAGA_DIR/$s.msg" 2>/dev/null)
+            [[ "$t" =~ ^[0-9]+$ ]] || t=0
+            if [ $(( now - t )) -ge 1800 ]; then
+                echo "$now" > "$JAGA_DIR/$s.msg"
+                jaga_tg "SERVIS MATI" "$s" "Dah dihidupkan semula (berjaya)."
+            fi
+        else
+            first=0; [ -f "$JAGA_DIR/$s.gagal" ] || first=1
+            echo "$now" > "$JAGA_DIR/$s.gagal"
+            jaga_log "$s mati, GAGAL dihidupkan"
+            [ "$first" = 1 ] && jaga_tg "SERVIS MATI" "$s" "GAGAL dihidupkan. Semak: systemctl status $s"
+        fi
+    done
+}
+jaga_on()  { printf '%s\n' '*/2 * * * * root /usr/bin/m-tools jaga >/dev/null 2>&1' > "$JAGA_CRON" 2>/dev/null && chmod 644 "$JAGA_CRON"; }
+jaga_off() { rm -f "$JAGA_CRON"; }
+t_jaga() {
+    local p st s
+    while true; do
+        [ -f "$JAGA_CRON" ] && st="${GR}ON${NC}" || st="${RD}OFF${NC}"
+        clear; echo ""
+        kn_top; kn_title "PANTAU SERVIS"; kn_mid
+        printf '%b│%b Status  : %b\n' "$COLOR1" "$NC" "$st"
+        printf '%b│%b Semak   : setiap 2 minit\n' "$COLOR1" "$NC"
+        printf '%b│%b Bila mati: hidupkan semula + Telegram\n' "$COLOR1" "$NC"
+        kn_mid
+        for s in $JAGA_SVCS; do
+            systemctl is-enabled --quiet "$s" 2>/dev/null && kn_svc "$s" "$s"
+        done
+        kn_mid
+        kn_item1 "01" "HIDUP / MATI"
+        kn_item1 "02" "UJIAN TELEGRAM"
+        kn_item1 "03" "LOG TERAKHIR"
+        kn_item1 "00" "KEMBALI"
+        kn_foot; echo ""
+        read -rp " Pilih : " p
+        case "$p" in
+            1|01)
+                if [ -f "$JAGA_CRON" ]; then jaga_off; echo -e " ${YL}Pantau dimatikan.${NC}"
+                elif jaga_on; then echo -e " ${GR}Pantau dihidupkan.${NC}"
+                else echo -e " ${RD}Gagal hidupkan pantau.${NC}"; fi
+                sleep 2 ;;
+            2|02)
+                if jaga_tg "UJIAN" "-" "Pantau servis berfungsi."; then echo -e " ${GR}Dihantar. Semak Telegram.${NC}"
+                else echo -e " ${RD}Token/ID Telegram belum ditetapkan (menu > 10 > 06).${NC}"; fi
+                sleep 3 ;;
+            3|03)
+                clear; echo ""
+                if [ -s "$JAGA_LOG" ]; then tail -n 15 "$JAGA_LOG"; else echo " Tiada rekod. Semua servis sihat."; fi
+                kn_pause ;;
+            0|00|x|X) return ;;
+        esac
+    done
+}
+
+# ---------- 7) BACKUP TELEGRAM  dan  8) PINDAH AKAUN ----------
+# Satu format fail (tar.gz): ssh.txt, xray.txt, lim-vless, lim-vmess, lim-trojan, meta.txt
+BK_CRON="/etc/cron.d/kancil-backup"
+bk_make() {   # $1 = fail .tar.gz
+    local w x n_ssh n_x r
+    w=$(mktemp -d) || return 1
+    mkdir -p "$w/d"
+    [ -f "$SSH_LIST" ] && grep -E '^### ' "$SSH_LIST" > "$w/d/ssh.txt"
+    [ -f "$XRAY_CFG" ] && awk '/^#(vl|vlg|vm|vmg|tr|trg) /{print; if ((getline nx) > 0) print nx}' "$XRAY_CFG" > "$w/d/xray.txt"
+    for x in vless vmess trojan; do [ -d "/etc/$x" ] && cp -r "/etc/$x" "$w/d/lim-$x" 2>/dev/null; done
+    n_ssh=$(grep -c '^### ' "$w/d/ssh.txt" 2>/dev/null)
+    n_x=$(grep -Ec '^#(vl|vm|tr) ' "$w/d/xray.txt" 2>/dev/null)
+    printf 'KANCIL-AKAUN 1\ndomain=%s\ntarikh=%s\nssh=%s\nxray=%s\n' "${domain:--}" "$(date '+%F %T')" "${n_ssh:-0}" "${n_x:-0}" > "$w/d/meta.txt"
+    tar -czf "$1" -C "$w/d" . 2>/dev/null; r=$?
+    rm -rf "$w"
+    chmod 600 "$1" 2>/dev/null
+    return $r
+}
+bk_send() {   # $1 = fail  $2 = kapsyen   (0 ok, 1 gagal, 2 tiada token)
+    local r
+    [ -z "$CHATID" ] || [ -z "$KEY" ] && return 2
+    r=$(curl -s --max-time 60 -F "chat_id=$CHATID" -F "document=@$1" -F "caption=$2" "https://api.telegram.org/bot$KEY/sendDocument" 2>/dev/null)
+    echo "$r" | grep -q '"ok":true' && return 0
+    return 1
+}
+bk_run() {   # mod cron / hantar sekarang: buat, hantar, padam
+    local f r
+    f="/tmp/akaun-$(date +%Y%m%d).tar.gz"
+    bk_make "$f" || { rm -f "$f"; return 1; }
+    bk_send "$f" "Backup akaun $(date +%F) | ${domain:--}"; r=$?
+    rm -f "$f"
+    return $r
+}
+bk_on()  { printf '%s\n' '30 3 * * * root /usr/bin/m-tools backup >/dev/null 2>&1' > "$BK_CRON" 2>/dev/null && chmod 644 "$BK_CRON"; }
+bk_off() { rm -f "$BK_CRON"; }
+bk_info() {   # $1 = fail  -> cetak ringkasan
+    local w; w=$(mktemp -d) || return 1
+    tar -xzf "$1" -C "$w" --wildcards '*meta.txt' 2>/dev/null
+    if head -n1 "$w/meta.txt" 2>/dev/null | grep -q '^KANCIL-AKAUN 1$'; then
+        kn_row "Dari" "$(grep '^domain=' "$w/meta.txt" | cut -d= -f2-)"
+        kn_row "Tarikh" "$(grep '^tarikh=' "$w/meta.txt" | cut -d= -f2-)"
+        kn_row "SSH" "$(grep '^ssh=' "$w/meta.txt" | cut -d= -f2-) akaun"
+        kn_row "Xray" "$(grep '^xray=' "$w/meta.txt" | cut -d= -f2-) akaun"
+        rm -rf "$w"; return 0
+    fi
+    rm -rf "$w"; return 1
+}
+t_backup() {
+    local p st r
+    while true; do
+        [ -f "$BK_CRON" ] && st="${GR}ON${NC}" || st="${RD}OFF${NC}"
+        clear; echo ""
+        kn_top; kn_title "BACKUP TELEGRAM"; kn_mid
+        printf '%b│%b Status  : %b\n' "$COLOR1" "$NC" "$st"
+        printf '%b│%b Waktu   : setiap hari 03:30\n' "$COLOR1" "$NC"
+        printf '%b│%b Isi     : akaun SSH, VMess, VLess, Trojan\n' "$COLOR1" "$NC"
+        printf '%b│%b Ke      : bot Telegram kamu\n' "$COLOR1" "$NC"
+        kn_mid
+        printf '%b│%b Fail ada password. Bot mesti PRIVATE.\n' "$COLOR1" "$NC"
+        kn_mid
+        kn_item1 "01" "HIDUP / MATI"
+        kn_item1 "02" "HANTAR SEKARANG"
+        kn_item1 "00" "KEMBALI"
+        kn_foot; echo ""
+        read -rp " Pilih : " p
+        case "$p" in
+            1|01)
+                if [ -f "$BK_CRON" ]; then bk_off; echo -e " ${YL}Backup harian dimatikan.${NC}"
+                elif bk_on; then echo -e " ${GR}Backup harian dihidupkan (03:30).${NC}"
+                else echo -e " ${RD}Gagal hidupkan backup.${NC}"; fi
+                sleep 2 ;;
+            2|02)
+                echo " Menghantar..."
+                bk_run; r=$?
+                case $r in
+                    0) echo -e " ${GR}Dihantar ke Telegram.${NC}" ;;
+                    2) echo -e " ${RD}Token/ID Telegram belum ditetapkan (menu > 10 > 06).${NC}" ;;
+                    *) echo -e " ${RD}Gagal hantar. Semak token dan internet.${NC}" ;;
+                esac
+                sleep 3 ;;
+            0|00|x|X) return ;;
+        esac
+    done
+}
+
+# import: ssh guna useradd, xray guna python3 + ujian config. Config lama disimpan, gagal = dipulihkan.
+bk_import() {   # $1 = fail tar.gz
+    local f="$1" w today u e p py res nb rb XB tl pr us d
+    local s_add=0 s_dup=0 s_old=0
+    [ -f "$f" ] || { echo -e " ${RD}Fail tak jumpa.${NC}"; return 1; }
+    w=$(mktemp -d) || return 1
+    if ! tar -xzf "$f" -C "$w" 2>/dev/null || ! head -n1 "$w/meta.txt" 2>/dev/null | grep -q '^KANCIL-AKAUN 1$'; then
+        echo -e " ${RD}Fail ni bukan backup akaun Kancil.${NC}"; rm -rf "$w"; return 1
+    fi
+    today=$(date +%Y-%m-%d)
+    # --- SSH ---
+    if [ -s "$w/ssh.txt" ]; then
+        touch "$SSH_LIST" 2>/dev/null
+        while read -r _ u e p; do
+            [[ "$u" =~ ^[A-Za-z0-9_-]{1,32}$ ]] || continue
+            [[ "$e" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || continue
+            [ -n "$p" ] || continue
+            if [[ "$e" < "$today" ]]; then s_old=$((s_old+1)); continue; fi
+            if getent passwd "$u" >/dev/null 2>&1; then s_dup=$((s_dup+1)); continue; fi
+            useradd -e "$e" -s /bin/false -M "$u" 2>/dev/null || { s_dup=$((s_dup+1)); continue; }
+            printf '%s:%s\n' "$u" "$p" | chpasswd 2>/dev/null
+            grep -q "^### $u " "$SSH_LIST" 2>/dev/null || echo "### $u $e $p" >> "$SSH_LIST"
+            s_add=$((s_add+1))
+        done < "$w/ssh.txt"
+    fi
+    # --- XRAY ---
+    res="tiada xray.txt"
+    if [ -s "$w/xray.txt" ] && [ -f "$XRAY_CFG" ]; then
+        py="$w/merge.py"
+        cat > "$py" <<'PYEOF'
+import sys, re
+cfg, xr, out, today = sys.argv[1:5]
+ANCH = {'#vl': '#vless', '#vlg': '#vlessgrpc', '#vm': '#vmess', '#vmg': '#vmessgrpc', '#tr': '#trojanws', '#trg': '#trojangrpc'}
+PROTO = {'#vl': 'vless', '#vlg': 'vless', '#vm': 'vmess', '#vmg': 'vmess', '#tr': 'trojan', '#trg': 'trojan'}
+lines = open(cfg, encoding='utf-8').read().split('\n')
+src = open(xr, encoding='utf-8').read().split('\n')
+pairs = []
+i = 0
+while i + 1 < len(src):
+    p = src[i].split(' ')
+    if p[0] in ANCH and len(p) >= 3 and src[i + 1].startswith('},{'):
+        pairs.append((p[0], p[1], p[2], src[i], src[i + 1]))
+        i += 2
+    else:
+        i += 1
+have = set()
+for l in lines:
+    q = l.split(' ')
+    if len(q) >= 2 and q[0] in ANCH:
+        have.add((q[0], q[1]))
+add = 0; dup = 0; old = 0; miss = set(); users = []
+for mk, user, exp, m, idl in pairs:
+    if not re.match(r'^[A-Za-z0-9_.-]{1,64}$', user): continue
+    if not re.match(r'^\d{4}-\d{2}-\d{2}$', exp): continue
+    if exp < today:
+        if mk in ('#vl', '#vm', '#tr'): old += 1
+        continue
+    if (mk, user) in have:
+        if mk in ('#vl', '#vm', '#tr'): dup += 1
+        continue
+    idx = None
+    for k, l in enumerate(lines):
+        if l.endswith(ANCH[mk]):
+            idx = k; break
+    if idx is None:
+        miss.add(ANCH[mk]); continue
+    lines[idx + 1:idx + 1] = [m, idl]
+    have.add((mk, user))
+    if mk in ('#vl', '#vm', '#tr'):
+        add += 1; users.append(PROTO[mk] + ' ' + user)
+open(out, 'w', encoding='utf-8').write('\n'.join(lines))
+open(out + '.users', 'w', encoding='utf-8').write('\n'.join(users) + ('\n' if users else ''))
+print('add=%d dup=%d old=%d miss=%s' % (add, dup, old, ','.join(sorted(miss)) or '-'))
+PYEOF
+        res=$(python3 "$py" "$XRAY_CFG" "$w/xray.txt" "$w/new.json" "$today" 2>&1 | tail -n1)
+        if [[ "$res" == add=* ]] && ! [[ "$res" == add=0\ * ]]; then
+            XB=$(command -v xray 2>/dev/null || echo /usr/local/bin/xray)
+            if [ -x "$XB" ] && { "$XB" run -test -config "$w/new.json" >/dev/null 2>&1 || "$XB" -test -config "$w/new.json" >/dev/null 2>&1; }; then
+                nb="/root/config.json.sebelum-import-$(date +%Y%m%d-%H%M%S)"
+                cp -a "$XRAY_CFG" "$nb"
+                cp "$w/new.json" "$XRAY_CFG"
+                systemctl restart xray >/dev/null 2>&1
+                sleep 2
+                if systemctl is-active --quiet xray 2>/dev/null; then
+                    while read -r pr us; do
+                        [ -z "$us" ] && continue
+                        mkdir -p "/etc/$pr" 2>/dev/null
+                        for d in "$us" "${us}IP"; do
+                            [ -f "$w/lim-$pr/$d" ] && [ ! -e "/etc/$pr/$d" ] && cp "$w/lim-$pr/$d" "/etc/$pr/$d"
+                        done
+                        if [ "$pr" = trojan ] && [ -f "$w/lim-trojan/akun/$us" ] && [ ! -e "/etc/trojan/akun/$us" ]; then
+                            mkdir -p /etc/trojan/akun; cp "$w/lim-trojan/akun/$us" "/etc/trojan/akun/$us"
+                        fi
+                    done < "$w/new.json.users"
+                else
+                    cp "$nb" "$XRAY_CFG"; systemctl restart xray >/dev/null 2>&1
+                    res="GAGAL: xray tak hidup selepas import, config dipulihkan"
+                fi
+            else
+                res="GAGAL: config baru tak lulus ujian xray, tiada apa diubah"
+            fi
+        fi
+    fi
+    rm -rf "$w"
+    echo ""
+    echo -e " ${WH}SSH   :${NC} ${GR}${s_add} ditambah${NC}, ${s_dup} dah ada, ${s_old} tamat"
+    if [[ "$res" == add=* ]]; then
+        echo -e " ${WH}Xray  :${NC} ${GR}$(echo "$res" | sed 's/add=\([0-9]*\) dup=\([0-9]*\) old=\([0-9]*\) miss=\(.*\)/\1 ditambah/')${NC}, $(echo "$res" | sed 's/.*dup=\([0-9]*\) old=\([0-9]*\).*/\1 dah ada, \2 tamat/')"
+        echo "$res" | grep -q 'miss=-' || echo -e " ${YL}Tak jumpa tempat dalam config: $(echo "$res" | sed 's/.*miss=//')${NC}"
+    else
+        echo -e " ${WH}Xray  :${NC} ${YL}${res}${NC}"
+    fi
+    echo -e " ${WH}Nota  :${NC} link akaun lama lihat di menu CEK USER CONFIG"
+    return 0
+}
+t_pindah() {
+    local p f i n arr sel
+    while true; do
+        clear; echo ""
+        kn_top; kn_title "PINDAH AKAUN"; kn_mid
+        kn_item1 "01" "EKSPORT (buat fail akaun)"
+        kn_item1 "02" "IMPORT (dari fail akaun)"
+        kn_item1 "00" "KEMBALI"
+        kn_foot; echo ""
+        read -rp " Pilih : " p
+        case "$p" in
+            1|01)
+                f="/root/akaun-$(date +%Y%m%d-%H%M).tar.gz"
+                clear; echo ""
+                if bk_make "$f"; then
+                    kn_top; kn_title "EKSPORT SIAP"; kn_mid
+                    bk_info "$f"
+                    kn_mid
+                    printf '%b│%b Fail: %s\n' "$COLOR1" "$NC" "$f"
+                    kn_bot; echo ""
+                    echo -e " ${WH}Hantar ke VPS baru, taip di VPS ni:${NC}"
+                    echo " scp $f root@IP_VPS_BARU:/root/"
+                    echo -e " ${WH}Lepas tu kat VPS baru: m-tools > 08 > 02${NC}"
+                    echo -e " ${YL}Fail ada password. Padam lepas siap.${NC}"
+                else
+                    echo -e " ${RD}Gagal buat fail.${NC}"
+                fi
+                kn_pause ;;
+            2|02)
+                clear; echo ""
+                arr=(/root/akaun-*.tar.gz)
+                [ -e "${arr[0]}" ] || arr=()
+                kn_top; kn_title "IMPORT AKAUN"; kn_mid
+                if [ "${#arr[@]}" -gt 0 ]; then
+                    i=0; for n in "${arr[@]}"; do i=$((i+1)); printf '%b│%b %2d) %s\n' "$COLOR1" "$NC" "$i" "$n"; done
+                else
+                    printf '%b│%b Tiada fail akaun-*.tar.gz dalam /root\n' "$COLOR1" "$NC"
+                fi
+                kn_bot; echo ""
+                read -rp " Nombor atau path fail (kosong = batal): " sel
+                [ -z "$sel" ] && continue
+                if [[ "$sel" =~ ^[0-9]+$ ]] && [ "$sel" -ge 1 ] && [ "$sel" -le "${#arr[@]}" ]; then f="${arr[$((sel-1))]}"; else f="$sel"; fi
+                clear; echo ""
+                kn_top; kn_title "SEMAK FAIL"; kn_mid
+                if ! bk_info "$f"; then
+                    printf '%b│%b Bukan fail akaun Kancil\n' "$COLOR1" "$NC"; kn_bot; echo ""; kn_pause; continue
+                fi
+                kn_bot; echo ""
+                echo -e " ${YL}Akaun yang dah ada atau dah tamat dilangkau.${NC}"
+                read -rp " Teruskan import? (y/n): " p
+                [ "$p" = y ] || [ "$p" = Y ] && bk_import "$f"
+                kn_pause ;;
+            0|00|x|X) return ;;
+        esac
+    done
+}
+
 # ---------- mod cron ----------
 if [ "$1" = "remind" ]; then
     remind_send
     exit 0
 fi
+if [ "$1" = "jaga" ]; then
+    jaga_run
+    exit 0
+fi
+if [ "$1" = "backup" ]; then
+    bk_run
+    exit $?
+fi
 
 # ---------- menu ----------
 while true; do
     [ -f "$CRON_FILE" ] && rs="${GR}ON${NC}" || rs="${RD}OFF${NC}"
+    [ -f "$JAGA_CRON" ] && js="${GR}ON${NC}" || js="${RD}OFF${NC}"
+    [ -f "$BK_CRON" ] && bs="${GR}ON${NC}" || bs="${RD}OFF${NC}"
     clear; echo ""
     kn_top; kn_title_r "TOOLS KANCIL"; kn_mid
     kn_item1 "01" "RINGKASAN AKAUN"
@@ -428,6 +791,9 @@ while true; do
     kn_item1 "03" "NOTA PELANGGAN"
     printf '%b│%b %b[%b04%b]%b PERINGATAN HARIAN %b\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$WH" "$NC" "$rs"
     kn_item1 "05" "KESIHATAN VPS"
+    printf '%b│%b %b[%b06%b]%b PANTAU SERVIS %b\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$WH" "$NC" "$js"
+    printf '%b│%b %b[%b07%b]%b BACKUP TELEGRAM %b\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$WH" "$NC" "$bs"
+    kn_item1 "08" "PINDAH AKAUN"
     kn_item1 "00" "KEMBALI"
     kn_foot; echo ""
     echo -ne " ${WH}Pilih menu ${COLOR1}: ${WH}"
@@ -439,6 +805,9 @@ while true; do
         3|03) t_nota ;;
         4|04) t_peringatan ;;
         5|05) t_kesihatan ;;
+        6|06) t_jaga ;;
+        7|07) t_backup ;;
+        8|08) t_pindah ;;
         0|00|x|X) break ;;
     esac
 done
