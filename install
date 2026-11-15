@@ -1,6 +1,6 @@
 #!/bin/bash
 # Script Installer
-# Dibuat oleh: HokageLegend9999
+# Developer by kancil ecem
 
 # --- Definisi Warna ---
 NC='\033[0m' # No Color
@@ -95,7 +95,7 @@ if [[ -n "$matched_line" ]]; then
         break
     else
         echo -e "${red}❌ Client Name atau IP ($IP_VPS) tidak terdaftar!${NC}"
-        echo -e "➥ Hubungi admin ${CYAN}「 ✦ @HokageLegend ✦ 」${NC}"
+        echo -e "➥ Hubungi admin ${CYAN}「 ✦ kancil ecem ✦ 」${NC}"
         # Hapus file installer jika validasi gagal
         rm -f /root/home 
         exit 1
@@ -110,31 +110,7 @@ sleep 2
 
 clear
 
-# --- Detail API Bot Telegram ---
-TOKEN="8401742770:AAFXaP8YTgwBztSwOqxCUQRTzD2dlQhk9xA"
-CHAT_ID="1469244768"
-
-# --- Fungsi untuk Mengirim Pesan ke Telegram ---
-send_telegram_message() {
-    MESSAGE=$1
-    BUTTON1_URL="https://t.me/hokagelegend1"
-    BUTTON2_URL="https://wa.me/087726917005"
-    BUTTON_TEXT1="Telegram 😎"
-    BUTTON_TEXT2="Whatsapp 🐳"
-
-    RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TOKEN/sendMessage" \
-        -d chat_id="$CHAT_ID" \
-        -d parse_mode="MarkdownV2" \
-        -d text="$MESSAGE" \
-        -d reply_markup='{
-                "inline_keyboard": [
-                    [{"text": "'"$BUTTON_TEXT1"'", "url": "'"$BUTTON1_URL"'"}, {"text": "'"$BUTTON_TEXT2"'", "url": "'"$BUTTON2_URL"'"}]
-                ]
-            }')
-
-    # Cetak respons menggunakan jq untuk pretty-print
-    #echo "$RESPONSE" | jq .
-}
+# (Tiada maklumat VPS dihantar ke mana-mana pihak luar.)
 
 # --- Validasi Root Access ---
 if [[ "${EUID}" -ne 0 ]]; then
@@ -264,24 +240,13 @@ if [[ $domain == "1" ]]; then
     
 fi
 
-# --- Daftar Tema Warna ---
-declare -A themes=(
-    [red]=$'\E[40;1;41m:\033[0;31m'
-    [green]=$'\E[40;1;42m:\033[0;32m'
-    [yellow]=$'\E[40;1;43m:\033[0;33m'
-    [blue]=$'\E[40;1;44m:\033[0;34m'
-    [magenta]=$'\E[40;1;95m:\033[0;95m'
-    [cyan]=$'\E[40;1;46m:\033[0;36m'
-)
-
-# Membuat file konfigurasi tema
-for color in "${!themes[@]}"; do
-    IFS=':' read -r bg text <<< "${themes[$color]}"
-    cat << EOF > "/etc/phreakers/theme/${color}"
-BG : ${bg}
-TEXT : ${text}
-EOF
+# --- Daftar Tema Warna (12 tema, kod 256 warna) ---
+# nama:warna teks:warna latar
+for t in red:203:160 orange:215:166 yellow:227:136 lime:154:64 green:83:28 aqua:85:36 cyan:45:31 blue:75:25 purple:141:55 magenta:207:127 pink:218:168 silver:252:240; do
+    IFS=: read -r tn tf tb <<< "$t"
+    printf 'BG : \033[1;48;5;%sm\nTEXT : \033[38;5;%sm\n' "$tb" "$tf" > "/etc/phreakers/theme/${tn}"
 done
+: > /etc/phreakers/theme/.kn2
 
 # Set tema default ke cyan
 echo "cyan" > /etc/phreakers/theme/color.conf
@@ -457,8 +422,8 @@ USAGE_JOB2="*/2 * * * * /usr/bin/update-ssh-usage.sh >/dev/null 2>&1"
 }
 
 
-# --- Proses Instalasi HOKAGE LEGEND ---
-function HOKAGEINSTALL(){
+# --- Proses Instalasi (Developer by kancil ecem) ---
+function KANCILINSTALL(){
     echo -e "${BIBlue}╭══════════════════════════════════════════╮${NC}"
     echo -e "${BIBlue}│ ${BGCOLOR}    PROCESS INSTALLED SSH WS / OPENVPN    ${NC}${BIBlue} │${NC}"
     echo -e "${BIBlue}╰══════════════════════════════════════════╯${NC}"
@@ -514,7 +479,7 @@ function HOKAGEINSTALL(){
     echo -e "${BIBlue}╰══════════════════════════════════════════╯${NC}"
     res12
 }
-HOKAGEINSTALL # Memanggil fungsi SKT4100
+KANCILINSTALL # Memanggil fungsi pemasangan
 
 # --- Konfigurasi Post-Instalasi ---
 # Pastikan file /home/re_otm ada dan berikan nilai default jika tidak
@@ -561,8 +526,8 @@ cd
 
 # --- Pengambilan Info Server & Pembersihan File ---
 curl -sS ifconfig.me > /etc/myipvps
-curl -s ipinfo.io/city?token=75082b4831f909 >> /etc/xray/city
-curl -s ipinfo.io/org?token=75082b4831f909 | cut -d " " -f 2-10 >> /etc/xray/isp
+curl -s ipinfo.io/city > /etc/xray/city
+curl -s ipinfo.io/org | cut -d " " -f 2-10 > /etc/xray/isp
 rm /root/setup.sh >/dev/null 2>&1
 rm /root/slhost.sh >/dev/null 2>&1
 rm /root/ssh-vpn.sh >/dev/null 2>&1
@@ -605,41 +570,23 @@ sleep 3
 echo ""
 cd
 
-# --- Kirim Pesan Sukses ke Telegram ---
-IPVPS=$(curl -s https://ipinfo.io/ip)
-HOSTNAME=$(hostname)
-USERVPS=$(whoami)
-OS=$(lsb_release -d | awk -F"\t" '{print $2}')
-ISP=$(curl -s https://ipinfo.io/org | awk '{print $2,$3,$4}')
-USER=$client_name
-REGION=$(curl -s ipinfo.io/region)
-DATE=$(date '+%Y-%m-%d')
-TIME=$(date '+%H:%M:%S')
-DOMAIN=$(cat /etc/xray/domain)
-exp_date=$(echo "$permission_file" | grep -w "$client_name" | awk '{print $3}')
-
-MESSAGE="\`\`\`
-❏━━━━━━━━━━━━━━━━━━━━━━━━━━❏
- 🤖 Hokage Store Project 🤖
-❏━━━━━━━━━━━━━━━━━━━━━━━━━━❏
-❖ Status      : Active
-❖ User VPS    : $USERVPS
-❖ User SC     : $USER
-❖ HOST VPS    : $HOSTNAME
-❖ Linux OS    : $OS
-❖ ISP         : $ISP
-❖ IP VPS      : $IPVPS
-❖ Area ISP    : $REGION
-❖ Waktu       : $TIME
-❖ Tanggal     : $DATE
-❖ Domain      : $DOMAIN
-❖ Expired     : $exp_date
-❏━━━━━━━━***************━━━━━━━━━❏
-👑 Dev https://t.me/hokagelegend1 👑
-❏━━━━━━━******************━━━━━━━━❏
-\`\`\`"
-
-send_telegram_message "$MESSAGE"
+# --- Ringkasan pemasangan (hanya dipapar di skrin ini) ---
+SUM_IP=$(curl -s https://ipinfo.io/ip)
+SUM_DOMAIN=$(cat /etc/xray/domain 2>/dev/null)
+SUM_EXP=$(echo "$permission_file" | grep -w "$client_name" | awk '{print $3}')
+BAR="──────────────────────────────────────"
+clear
+echo -e "${BICyan}╭${BAR}╮${NC}"
+echo -e "${BICyan}│${NC}${BGCOLOR}          PEMASANGAN SIAP             ${NC}${BICyan}│${NC}"
+echo -e "${BICyan}├${BAR}┤${NC}"
+echo -e "${BICyan}│${NC} ${BIWhite}Client  : ${client_name}${NC}"
+echo -e "${BICyan}│${NC} ${BIWhite}IP VPS  : ${SUM_IP}${NC}"
+echo -e "${BICyan}│${NC} ${BIWhite}Domain  : ${SUM_DOMAIN}${NC}"
+echo -e "${BICyan}│${NC} ${BIWhite}Lesen   : ${SUM_EXP}${NC}"
+echo -e "${BICyan}│${NC} ${BIWhite}Menu    : taip  menu${NC}"
+echo -e "${BICyan}├${BAR}┤${NC}"
+echo -e "${BICyan}│${NC}${BIWhite}       Developer by kancil ecem       ${NC}${BICyan}│${NC}"
+echo -e "${BICyan}╰${BAR}╯${NC}"
 clear
 sleep 2
 
