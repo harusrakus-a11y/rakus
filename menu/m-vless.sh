@@ -114,6 +114,33 @@ cd
 if [ ! -e /etc/vless/akun ]; then
 mkdir -p /etc/vless/akun
 fi
+telco_conf=/etc/xray/telco.conf
+telco_init() {
+[ -s $telco_conf ] && return
+cat > $telco_conf <<'EOT'
+# nama|alamat|host|path|port   ({domain} = domain VPS)
+celcom|mcmc-my.metricelltestcloud.com.{domain}|mcmc-my.metricelltestcloud.com|/vless|80
+digi|104.18.21.212|{domain}|/vless|80
+maxis-viu|help.viu.com.{domain}|help.viu.com|/vless|80
+maxis-cmgo|104.16.160.145|cfcdn.viu.com.{domain}|/vless|80
+yes|104.17.147.22|{domain}|/vless|80
+tonewow|172.66.169.187|{domain}|/vless|80
+EOT
+}
+telco_links() {
+local u=$1 nm=$2 sel=$3 n=0 name addr host pth port
+[ -z "$sel" ] && return
+while IFS='|' read -r name addr host pth port; do
+[[ -z $name || $name == \#* ]] && continue
+n=$((n+1))
+if [[ $sel != 0 && $sel != $n ]]; then continue; fi
+addr=${addr//\{domain\}/$domain}
+host=${host//\{domain\}/$domain}
+pth=${pth:-/vless}
+port=${port:-80}
+echo "${name}|vless://${u}@${addr}:${port}?encryption=none&type=ws&host=${host}&headerType=none&path=${pth//\//%2F}#${nm}-${name}"
+done < $telco_conf
+}
 function add-vless(){
 clear
 until [[ $user =~ ^[a-zA-Z0-9_.-]+$ && ${CLIENT_EXISTS} == '0' ]]; do
@@ -160,6 +187,20 @@ read -p "Limit User (IP) or 0 Unlimited: " iplim
 done
 until [[ $Quota =~ ^[0-9]+$ ]]; do
 read -p "Limit User (GB) or 0 Unlimited: " Quota
+done
+telco_init
+echo ""
+echo "Pilih telco untuk link tambahan:"
+ti=0
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+echo " $ti) $tn"
+done < $telco_conf
+echo " 0) semua telco"
+tsel="x"
+until [[ -z $tsel || ( $tsel =~ ^[0-9]+$ && $tsel -le $ti ) ]]; do
+read -rp "Telco (kosong = tiada): " tsel
 done
 if [ ! -e /etc/vless ]; then
 mkdir -p /etc/vless
@@ -251,6 +292,13 @@ _______________________________
 Link GRPC : vless://${uuid}@${domain}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc&sni=${domain}#${user}
 _______________________________
 END
+telcolines="$(telco_links "$uuid" "$user" "$tsel")"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+echo "Link ${tn} : ${tl}" >> /home/vps/public_html/vless-$user.txt
+echo "_______________________________" >> /home/vps/public_html/vless-$user.txt
+done <<< "$telcolines"
+fi
 if [ ${Quota} = '9999' ]; then
 TEXT="
 ◇━━━━━━━━━━━━━━━━━◇
@@ -367,6 +415,13 @@ echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}
 echo -e "$COLOR1 ${NC} ${COLOR1}Link gRPC               ${WH}:${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
 echo -e "$COLOR1${NC}${WH}${vlesslink3}${NC}"  | tee -a /etc/vless/akun/log-create-${user}.log
 echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+echo -e "$COLOR1 ${NC} ${COLOR1}Link ${tn}${WH} :${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
+echo -e "$COLOR1${NC}${WH}${tl}${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
+echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
+done <<< "$telcolines"
+fi
 echo -e "$COLOR1 ${NC} ${WH}Format Openclash ${COLOR1}: " | tee -a /etc/vless/akun/log-create-${user}.log
 echo -e "$COLOR1 ${NC} ${WH}http://$domain:89/vless-$user.txt${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
 echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vless/akun/log-create-${user}.log
