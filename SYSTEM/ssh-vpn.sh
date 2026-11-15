@@ -328,11 +328,13 @@ netfilter-persistent reload
 cd /usr/bin
 wget -O issue "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/SYSTEM/issue.net"
 wget -O m-theme "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-theme.sh"
+wget -O m-tools "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-tools.sh"
 wget -O speedtest "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/SYSTEM/speedtest_cli.py"
 wget -O xp "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/SYSTEM/xp.sh"
 
 chmod +x issue
 chmod +x m-theme
+chmod +x m-tools
 chmod +x speedtest
 chmod +x xp
 cd
