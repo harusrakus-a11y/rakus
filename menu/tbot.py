@@ -38,6 +38,8 @@ tonewow|172.66.169.187|{domain}|/vless|80
 TELCO_RE = re.compile(r"^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,30}$")
 PW_RE = re.compile(r"^[A-Za-z0-9._@#%+=!-]{4,32}$")
+UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+UTXT_RE = re.compile(r"^[A-Za-z0-9._-]{8,30}$")
 
 TOKEN = ""
 ADMINS = set()
@@ -359,8 +361,8 @@ _______________________________
            l3=vless_std_links(user, uid)[2][1])
 
 
-def vless_create(user, days, iplim, quota):
-    uid = str(uuidlib.uuid4())
+def vless_create(user, days, iplim, quota, custom_uuid=None):
+    uid = custom_uuid or str(uuidlib.uuid4())
     exp = exp_after(days)
 
     def edit():
@@ -589,8 +591,19 @@ def v_pw(chat, s):
     return False, "Kata laluan 4-32 aksara (huruf, nombor, . _ @ # % + = ! -). Atau taip auto."
 
 
+def v_uuid(chat, s):
+    if s.lower() == "auto":
+        return True, None
+    if not (UUID_RE.match(s) or UTXT_RE.match(s)):
+        return False, "UUID tak sah. Guna UUID biasa (8-4-4-4-12) atau teks 8-30 aksara (A-Z a-z 0-9 . _ -). Atau taip auto."
+    if ('"%s"' % s) in "\n".join(lines_of("/etc/xray/config.json")):
+        return False, "UUID tu dah dipakai. Cuba yang lain."
+    return True, s
+
+
 FLOWS = {
-    "vl": [("nama", "Nama akaun VLESS?", v_name), ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)),
+    "vl": [("nama", "Nama akaun VLESS?", v_name),
+           ("uuid", "UUID custom? (taip auto untuk jana sendiri)", v_uuid), ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)),
            ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)), ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999))],
     "ss": [("nama", "Nama akaun SSH?", v_name), ("pw", "Kata laluan? (taip auto untuk jana sendiri)", v_pw),
            ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)), ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)),
@@ -610,7 +623,7 @@ def finish(chat, st):
     STATE.pop(chat, None)
     if flow == "vl":
         send(chat, "Sekejap, cipta akaun...")
-        r, err = vless_create(d["nama"], d["hari"], d["ip"], d["gb"])
+        r, err = vless_create(d["nama"], d["hari"], d["ip"], d["gb"], d.get("uuid"))
         if not r:
             send(chat, E(err), MAIN_KB)
             return
@@ -690,7 +703,7 @@ def on_command(chat, text):
     elif cmd == "/bantuan":
         send(chat, "\n".join([
             "<b>Arahan</b>", "/menu - butang utama",
-            "/vless nama hari [ip] [gb] - cipta VLESS terus",
+            "/vless nama hari [ip] [gb] [uuid] - cipta VLESS terus (uuid custom: letak 0 0 dulu)",
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/batal - berhenti soalan"]))
@@ -709,7 +722,8 @@ def on_command(chat, text):
             ok2, d["hari"] = v_int(1, 3650)(chat, vals[1])
             ok3, d["ip"] = v_int(0, 9999)(chat, vals[2])
             ok4, d["gb"] = v_int(0, 9999)(chat, vals[3])
-            bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"])) if not ok]
+            ok5, d["uuid"] = v_uuid(chat, a[4] if len(a) >= 5 else "auto")
+            bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"]), (ok5, d["uuid"])) if not ok]
             if bad:
                 send(chat, E(bad[0]))
                 return
