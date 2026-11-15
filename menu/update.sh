@@ -74,7 +74,7 @@ if check_ip_and_get_info "$IP_VPS"; then
     fi
 else
     echo -e "${RED}❌ IP tidak terdaftar!${NC}"
-    echo -e "➥ Hubungi admin ${CYAN}「 ✦ HOKAGE LEGEND ✦ 」${NC}"
+    echo -e "➥ Hubungi admin ${CYAN}「 ✦ kancil ecem ✦ 」${NC}"
     exit 1
 fi
 
@@ -122,8 +122,8 @@ wget -q -O /usr/bin/manual-restore "https://raw.githubusercontent.com/harusrakus
 
 wget -q -O /usr/bin/xraylimit "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/xraylimit.sh" && chmod +x /usr/bin/xraylimit
 wget -q -O /usr/bin/trialvmess "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialvmess.sh" && chmod +x /usr/bin/trialvmess
-wget -q -O /usr/bin/trialvless "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialtrojan.sh" && chmod +x /usr/bin/trialtrojan
-wget -q -O /usr/bin/trialtrojan "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialvless.sh" && chmod +x /usr/bin/trialvless
+wget -q -O /usr/bin/trialvless "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialvless.sh" && chmod +x /usr/bin/trialvless
+wget -q -O /usr/bin/trialtrojan "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialtrojan.sh" && chmod +x /usr/bin/trialtrojan
 wget -q -O /usr/bin/trialssh "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trialssh.sh" && chmod +x /usr/bin/trialssh
 wget -q -O /usr/bin/trial "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/trial.sh" && chmod +x /usr/bin/trial
 wget -q -O /usr/bin/online "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/online" && chmod +x /usr/bin/online

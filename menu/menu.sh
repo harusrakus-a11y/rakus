@@ -1,8 +1,9 @@
 #!/bin/bash
+# Menu utama - Developer by kancil ecem
 clear
 
 # =============================================
-#           [ Konfigurasi Warna ]
+#           [ Warna asas ]
 # =============================================
 export RED='\033[0;31m'
 export GREEN='\033[0;32m'
@@ -11,400 +12,278 @@ export BLUE='\033[0;34m'
 export CYAN='\033[0;36m'
 export NC='\033[0m'
 export ORANGE='\033[0;91m'
+WH='\033[1;37m'
+
 # =============================================
-#          [ Fungsi Pengecekan IP ]
+#          [ Semakan lesen ]
+# =============================================
 check_ip_and_get_info() {
     local ip=$1
     while IFS= read -r line; do
-        # Hapus karakter khusus dan spasi berlebih
         line=$(echo "$line" | tr -d '\r' | sed 's/[^[:print:]]//g' | xargs)
-
-        # Split baris menjadi array
         read -ra fields <<< "$line"
-
-        # Kolom 4 = IP Address (index 3)
+        # Kolum 4 = IP
         if [[ "${fields[3]}" == "$ip" ]]; then
-            client_name="${fields[1]}"  # Kolom 2
-            exp_date="${fields[2]}"     # Kolom 3
-
-            # Bersihkan tanggal dari karakter khusus
+            client_name="${fields[1]}"
+            exp_date="${fields[2]}"
             exp_date=$(echo "$exp_date" | sed 's/[^0-9-]//g' | xargs)
-
             return 0
         fi
     done <<< "$permission_file"
     return 1
 }
 
-# =============================================
-#          [ Main Script ]
-# =============================================
-
-# Ambil data dari GitHub dengan timeout
 permission_file=$(curl -s --connect-timeout 10 https://raw.githubusercontent.com/harusrakus-a11y/ijin/refs/heads/main/akses)
-
-# Validasi file permission
 if [ -z "$permission_file" ]; then
-    echo -e "${RED}❌ Gagal mengambil data lisensi!${NC}"
+    echo -e "${RED}Gagal ambil data lesen. Semak internet VPS.${NC}"
     exit 1
 fi
 
-# Ambil IP VPS dengan metode alternatif
-IP_VPS=$(curl -s ipv4.icanhazip.com)
+IP_VPS=$(curl -s --connect-timeout 5 ipv4.icanhazip.com)
 
-# =============================================
-#          [ Pengecekan IP ]
-# =============================================
-echo -e "${GREEN}⌛ Memeriksa lisensi...${NC}"
+echo -e "${GREEN}Memeriksa lesen...${NC}"
 if check_ip_and_get_info "$IP_VPS"; then
-
-    # Validasi format tanggal ISO 8601
     if ! [[ "$exp_date" =~ ^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$ ]]; then
-        echo -e "${RED}❌ Format tanggal invalid: '$exp_date' (harus YYYY-MM-DD)${NC}"
+        echo -e "${RED}Format tarikh lesen tak betul: '$exp_date' (mesti YYYY-MM-DD)${NC}"
         exit 1
     fi
-
-    # Validasi tanggal menggunakan date
     if ! date -d "$exp_date" "+%s" &>/dev/null; then
-        echo -e "${RED}❌ Tanggal tidak valid secara kalender: $exp_date${NC}"
+        echo -e "${RED}Tarikh lesen tak sah: $exp_date${NC}"
         exit 1
     fi
 else
-    echo -e "${RED}❌ IP tidak terdaftar!${NC}"
-    echo -e "➥ Hubungi admin ${CYAN}「 ✦ @HokageLegend ✦ 」${NC}"
+    echo -e "${RED}IP VPS ini belum didaftar.${NC}"
+    echo -e "Hubungi admin: ${CYAN}kancil ecem${NC}"
     exit 1
 fi
 
-# =============================================
-#          [ Hitung Hari Tersisa ]
-# =============================================
 current_epoch=$(date +%s)
 exp_epoch=$(date -d "$exp_date" +%s)
-
 if (( exp_epoch < current_epoch )); then
-    echo -e "${RED}❌ Masa aktif telah habis!${NC}"
+    echo -e "${RED}Tempoh lesen dah tamat.${NC}"
     exit 1
 fi
-
 days_remaining=$(( (exp_epoch - current_epoch) / 86400 ))
 
-# =============================================
-#          [ Pengecekan Dependency ]
-# =============================================
 if ! command -v jq &>/dev/null; then
-    echo -e "${YELLOW}⚠️ Installing jq...${NC}"
-    sudo apt-get install jq -y
+    echo -e "${YELLOW}Memasang jq...${NC}"
+    apt-get install jq -y >/dev/null 2>&1
 fi
 
-# IP Information Setup
-IPINFO_TOKEN="Abc12345"  # Ganti dengan token Anda
+# =============================================
+#          [ Warna tema ]
+# =============================================
+# Tema baru (12 warna): tulis fail tema sekali sahaja selepas kemas kini
+if [ ! -e /etc/phreakers/theme/.kn2 ]; then
+    mkdir -p /etc/phreakers/theme 2>/dev/null
+    for t in red:203:160 orange:215:166 yellow:227:136 lime:154:64 green:83:28 aqua:85:36 cyan:45:31 blue:75:25 purple:141:55 magenta:207:127 pink:218:168 silver:252:240; do
+        IFS=: read -r tn tf tb <<< "$t"
+        printf 'BG : \033[1;48;5;%sm\nTEXT : \033[38;5;%sm\n' "$tb" "$tf" > "/etc/phreakers/theme/${tn}" 2>/dev/null
+    done
+    [ -s /etc/phreakers/theme/color.conf ] || echo cyan > /etc/phreakers/theme/color.conf 2>/dev/null
+    : > /etc/phreakers/theme/.kn2 2>/dev/null
+fi
+colornow=$(cat /etc/phreakers/theme/color.conf 2>/dev/null)
+COLOR1="$(grep -w "TEXT" /etc/phreakers/theme/$colornow 2>/dev/null | cut -d: -f2 | sed 's/ //g')"
+COLBG1="$(grep -w "BG" /etc/phreakers/theme/$colornow 2>/dev/null | cut -d: -f2 | sed 's/ //g')"
+[ -z "$COLOR1" ] && COLOR1='\033[0;36m'
+[ -z "$COLBG1" ] && COLBG1='\033[1;46m'
+NC='\033[0m'
 
-# System Information
-get_sys_info() {
-    # OS Info
-    OS=$(lsb_release -ds | sed 's/"//g' 2>/dev/null || cat /etc/*release | head -n1)
-    SERONLINE=$(uptime -p | cut -d " " -f 2-10000)
-
-    # Memory Info
-    RAM=$(free -m | awk '/Mem:/ {printf "%.0fM", $2}')
-    SWAP=$(free -m | awk '/Swap:/ {printf "%.0fM", $2}')
-
-    # CPU Info
-    CORE=$(nproc)
-    CPU_USAGE=$(top -bn1 | awk '/Cpu/ {printf "%.1f%%", 100 - $8}')
+# =============================================
+#          [ Fungsi paparan ]
+# =============================================
+KN_BRAND="Developer by kancil ecem"
+KN_BAR="──────────────────────────────────────"
+kn_top()   { echo -e "${COLOR1}╭${KN_BAR}╮${NC}"; }
+kn_mid()   { echo -e "${COLOR1}├${KN_BAR}┤${NC}"; }
+kn_bot()   { echo -e "${COLOR1}╰${KN_BAR}╯${NC}"; }
+kn_title() {
+    local t="$1" n l r
+    n=${#t}
+    if [ "$n" -gt 38 ]; then t="${t:0:38}"; n=38; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    printf '%b│%b%b%*s%b%s%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$WH" "$t" "$r" "" "$NC" "$COLOR1" "$NC"
 }
-
-# Network Information
-get_net_info() {
-    # IP Address
-    IPVPS=$(curl -s4 --connect-timeout 3 ifconfig.me || echo "Unknown")
-    ISP=$(curl -s --connect-timeout 3 ip-api.com/json/${IPVPS} | grep -Po '"isp":\s*"\K[^"]*' || echo "Unknown")
-    CITY=$(curl -s --connect-timeout 3 ip-api.com/json/${IPVPS} | grep -Po '"city":\s*"\K[^"]*' || echo "Unknown")
-
-    if [ -z "$ISP" ]; then
-        ISP=$(curl -s ipapi.co/org)
-    fi
-    if [ -z "$CITY" ]; then
-        CITY=$(curl -s ipapi.co/city)
-    fi
-
-    # Domain Info
-    DOMAIN=$(cat /etc/xray/domain 2>/dev/null || echo "Not Set")
+# Tajuk dengan kesan warna pelangi (boleh dimatikan: menu > SETTING > tema > 13)
+kn_title_r() {
+    local t="$1" n l r i k out=""
+    local pal=(210 216 222 228 192 157 158 159 153 147 183 218)
+    n=${#t}
+    if [ -e /etc/phreakers/theme/.norainbow ] || [ "$n" -gt 38 ] || [ "$n" -lt 2 ]; then kn_title "$t"; return; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    for (( i=0; i<n; i++ )); do
+        k=$(( i * 11 / (n - 1) ))
+        out+="\033[1;38;5;${pal[$k]}m${t:$i:1}"
+    done
+    printf '%b│%b%b%*s%b%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$out" "$r" "" "$NC" "$COLOR1" "$NC"
 }
+kn_row()   { printf '%b│%b %b%-10s%b: %s%b\n' "$COLOR1" "$NC" "$COLOR1" "$1" "$WH" "$2" "$NC"; }
+kn_cont()  { printf '%b│%b %-10s  %s%b\n' "$COLOR1" "$NC" "" "$1" "$NC"; }
+kn_item2() { printf '%b│%b %b[%b%s%b]%b %-12s %b[%b%s%b]%b %s\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$1" "$WH" "$NC" "$2" "$WH" "$COLOR1" "$3" "$WH" "$NC" "$4"; }
+kn_item1() { printf '%b│%b %b[%b%s%b]%b %s\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$1" "$WH" "$NC" "$2"; }
+kn_onoff() { if [ "$1" = "running" ] || [ "$1" = "active" ]; then printf '\033[1;32mON\033[0m'; else printf '\033[1;31mOFF\033[0m'; fi; }
 
-# Uptime Calculation
-get_uptime() {
-    uptime_sec=$(awk '{print $1}' /proc/uptime | cut -d. -f1)
-    days=$((uptime_sec/86400))
-    hours=$(( (uptime_sec%86400)/3600 ))
-    minutes=$(( (uptime_sec%3600)/60 ))
+svc_state() { systemctl is-active "$1" 2>/dev/null | head -n1; }
 
-    if [ $days -gt 0 ]; then
-        echo "${days}d ${hours}h ${minutes}m"
+# =============================================
+#          [ Kumpul maklumat (laju, tempatan) ]
+# =============================================
+MODEL2=$(grep -w PRETTY_NAME /etc/os-release 2>/dev/null | head -n1 | cut -d= -f2 | tr -d '"')
+CORE=$(nproc 2>/dev/null || echo 1)
+RAM_USED=$(free -h 2>/dev/null | awk '/Mem:/ {print $3}')
+RAM_TOT=$(free -h 2>/dev/null | awk '/Mem:/ {print $2}')
+CPU_IDLE=$(top -bn1 2>/dev/null | awk '/Cpu/ {for(i=2;i<=NF;i++) if ($i ~ /^id,?$/) {v=$(i-1); sub(/.*,/,"",v); print v; exit}}')
+if [[ "$CPU_IDLE" =~ ^[0-9.]+$ ]]; then
+    CPU_USE=$(awk -v i="$CPU_IDLE" 'BEGIN{printf "%.0f%%", 100-i}')
+else
+    CPU_USE="-"
+fi
+SERONLINE=$(uptime -p 2>/dev/null | sed 's/^up //')
+DOMAIN=$(cat /etc/xray/domain 2>/dev/null)
+ISP=$(cat /etc/xray/isp 2>/dev/null)
+CITY=$(cat /etc/xray/city 2>/dev/null)
+[ -z "$DOMAIN" ] && DOMAIN="-"
+[ -z "$ISP" ] && ISP="-"
+[ -z "$CITY" ] && CITY="-"
+[ -z "$MODEL2" ] && MODEL2="-"
+
+# trafik hari ini / bulan ini (vnstat --oneline, jika ada)
+T_DAY="-"; T_MON="-"
+if command -v vnstat >/dev/null 2>&1; then
+    vn=$(vnstat --oneline 2>/dev/null | head -n1)
+    if [ -n "$vn" ]; then
+        IFS=';' read -ra VN <<< "$vn"
+        [ -n "${VN[5]}" ] && T_DAY="${VN[5]}"
+        [ -n "${VN[10]}" ] && T_MON="${VN[10]}"
+    fi
+fi
+
+# jumlah akaun
+CFG=/etc/xray/config.json
+n_vmess=$(grep -c -E "^#vmg " "$CFG" 2>/dev/null); n_vmess=${n_vmess:-0}
+n_vless=$(grep -c -E "^#vlg " "$CFG" 2>/dev/null); n_vless=${n_vless:-0}
+n_trojan=$(grep -c -E "^#trg " "$CFG" 2>/dev/null); n_trojan=${n_trojan:-0}
+n_ssh=$(grep -c -E "^### " /etc/xray/ssh 2>/dev/null); n_ssh=${n_ssh:-0}
+
+# status servis
+st_ws=$(kn_onoff "$(svc_state ws-stunnel)")
+st_nginx=$(kn_onoff "$(svc_state nginx)")
+if [ "$(svc_state nginx)" != "active" ]; then systemctl start nginx >/dev/null 2>&1; fi
+st_xray=$(kn_onoff "$(svc_state xray)")
+st_db=$(kn_onoff "$(svc_state dropbear)")
+if [ -x /usr/local/bin/tbot.py ]; then st_bot=$(kn_onoff "$(svc_state tbot)"); else st_bot="\033[0;90m-\033[0m"; fi
+
+# =============================================
+#          [ Menu bot Telegram ]
+# =============================================
+bot_menu() {
+    local RAW="https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/tbot-install.sh"
+    local c
+    clear
+    kn_top
+    kn_title "BOT TELEGRAM"
+    kn_mid
+    if [ -x /usr/local/bin/tbot.py ]; then
+        kn_row "Status" "$(svc_state tbot)"
     else
-        echo "${hours}h ${minutes}m"
+        kn_row "Status" "belum dipasang"
+    fi
+    kn_mid
+    kn_item1 "1" "Pasang / kemas kini bot"
+    kn_item1 "2" "Tukar token / ID admin"
+    kn_item1 "3" "Mula semula bot"
+    kn_item1 "4" "Lihat log bot"
+    kn_item1 "5" "Buang bot"
+    kn_item1 "0" "Kembali"
+    kn_mid
+    kn_title_r "$KN_BRAND"
+    kn_bot
+    echo ""
+    echo -ne " ${WH}Pilih ${COLOR1}: ${WH}"; read -r c
+    case $c in
+    1 | 2)
+        if curl -fsSL --max-time 30 "$RAW" -o /root/tbot-install.sh; then
+            if [ "$c" = 2 ]; then bash /root/tbot-install.sh ubah; else bash /root/tbot-install.sh; fi
+        else
+            echo "Gagal muat turun pemasang bot."
+        fi ;;
+    3) systemctl restart tbot 2>/dev/null && echo "Bot dimulakan semula." || echo "Bot belum dipasang." ;;
+    4) journalctl -u tbot -n 25 --no-pager 2>/dev/null || echo "Tiada log." ;;
+    5) if [ -s /root/tbot-install.sh ]; then bash /root/tbot-install.sh buang; else echo "Pemasang tiada. Pilih 1 dulu."; fi ;;
+    *) return ;;
+    esac
+    echo ""
+    read -n 1 -s -r -p " Tekan sebarang kekunci untuk kembali"
+}
+
+kn_reboot() {
+    local a
+    echo -ne " ${WH}Reboot VPS sekarang? (y/n) ${COLOR1}: ${WH}"; read -r a
+    echo -ne "${NC}"
+    if [ "$a" = "y" ] || [ "$a" = "Y" ]; then
+        reboot
+    else
+        menu
     fi
 }
 
-#######################################
-dateFromServer=$(curl -v --insecure --silent https://google.com/ 2>&1 | grep Date | sed -e 's/< Date: //')
-biji=`date +"%Y-%m-%d" -d "$dateFromServer"`
-MYIP=$(curl -sS ipv4.icanhazip.com)
-#######################################
-colornow=$(cat /etc/phreakers/theme/color.conf)
-export NC="\e[0m"
-export RED='\033[0;31m'
-export GREEN='\033[0;32m'
-export yl='\033[0;33m';
-export RED="\033[0;31m"
-export COLOR1="$(cat /etc/phreakers/theme/$colornow | grep -w "TEXT" | cut -d: -f2|sed 's/ //g')"
-export COLBG1="$(cat /etc/phreakers/theme/$colornow | grep -w "BG" | cut -d: -f2|sed 's/ //g')"
-
-WH='\033[1;37m'
-#######################################
-# Server Information
-date_server=$(date -u +"%Y-%m-%d")
-wkt_server=$(timedatectl | grep "Time zone" | awk '{print $3}' | tr -d '()')
-
-# RAM Information
-tram=$(free -h | awk '/Mem:/ {print $2}')
-uram=$(free -h | awk '/Mem:/ {print $3}')
-#######################################
-# Network Information
-ipsaya=$(curl -s4 ifconfig.me)
-IPVPS=$(curl -s4 ifconfig.me)
-ISP=$(curl -s ipinfo.io/org | cut -d ' ' -f 2-10)
-CITY=$(curl -s ipinfo.io/city)
-#######################################
-
-mai="datediff "$Exp" "$DATE""
-
-# CERTIFICATE STATUS
-d1=$(date -d "$Exp2" +%s)
-d2=$(date -d "$today" +%s)
-certificate=$(( (d1 - d2) / 86400 ))
-
-WKT=$(curl -s ipinfo.io/timezone?token=$ipn )
-DAY=$(date +%A)
-DATE=$(date +%m/%d/%Y)
-DATE2=$(date -R | cut -d " " -f -5)
-MYIP=$(curl -sS ipv4.icanhazip.com)
-
-cd
-if [ ! -e /etc/per/id ]; then
-  mkdir -p /etc/per
-  echo "" > /etc/per/id
-  echo "" > /etc/per/token
-elif [ ! -e /etc/perlogin/id ]; then
-  mkdir -p /etc/perlogin
-  echo "" > /etc/perlogin/id
-  echo "" > /etc/perlogin/token
-elif [ ! -e /usr/bin/id ]; then
-  echo "" > /usr/bin/idchat
-  echo "" > /usr/bin/token
-fi
-
-if [ ! -e /etc/xray/ssh ]; then
-  echo "" > /etc/xray/ssh
-elif [ ! -e /etc/xray/sshx ]; then
-  mkdir -p /etc/xray/sshx
-elif [ ! -e /etc/xray/sshx/listlock ]; then
-  echo "" > /etc/xray/sshx/listlock
-elif [ ! -e /etc/vmess ]; then
-  mkdir -p /etc/vmess
-elif [ ! -e /etc/vmess/listlock ]; then
-  echo "" > /etc/vmess/listlock
-elif [ ! -e /etc/vless ]; then
-  mkdir -p /etc/vless
-elif [ ! -e /etc/vless/listlock ]; then
-  echo "" > /etc/vless/listlock
-elif [ ! -e /etc/trojan ]; then
-  mkdir -p /etc/trojan
-elif [ ! -e /etc/trojan/listlock ]; then
-  echo "" > /etc/trojan/listlock
-fi
+# =============================================
+#          [ Paparan menu ]
+# =============================================
 clear
-MODEL2=$(cat /etc/os-release | grep -w PRETTY_NAME | head -n1 | sed 's/=//g' | sed 's/"//g' | sed 's/PRETTY_NAME//g')
-LOADCPU=$(printf '%-0.00001s' "$(top -bn1 | awk '/Cpu/ { cpu = "" 100 - $8 "%" }; END { print cpu }')")
-CORE=$(printf '%-1s' "$(grep -c cpu[0-9] /proc/stat)")
-cpu_usage1="$(ps aux | awk 'BEGIN {sum=0} {sum+=$3}; END {print sum}')"
-cpu_usage="$((${cpu_usage1/\.*} / ${corediilik:-1}))"
-cpu_usage+=" %"
-# usage
-vnstat_profile=$(vnstat | sed -n '3p' | awk '{print $1}' | grep -o '[^:]*')
-vnstat -i ${vnstat_profile} >/etc/t1
-bulan=$(date +%b)
-tahun=$(date +%y)
-ba=$(curl -s https://pastebin.com/raw/0gWiX6hE)
-today=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $8}')
-todayd=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $8}')
-today_v=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $9}')
-today_rx=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $2}')
-today_rxv=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $3}')
-today_tx=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $5}')
-today_txv=$(vnstat -i ${vnstat_profile} | grep today | awk '{print $6}')
-if [ "$(grep -wc ${bulan} /etc/t1)" != '0' ]; then
-    bulan=$(date +%b)
-    month=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $9}')
-    month_v=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $10}')
-    month_rx=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $3}')
-    month_rxv=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $4}')
-    month_tx=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $6}')
-    month_txv=$(vnstat -i ${vnstat_profile} | grep "$bulan $ba$tahun" | awk '{print $7}')
-else
-    bulan2=$(date +%Y-%m)
-    month=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $8}')
-    month_v=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $9}')
-    month_rx=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $2}')
-    month_rxv=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $3}')
-    month_tx=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $5}')
-    month_txv=$(vnstat -i ${vnstat_profile} | grep "$bulan2 " | awk '{print $6}')
-fi
-if [ "$(grep -wc yesterday /etc/t1)" != '0' ]; then
-    yesterday=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $8}')
-    yesterday_v=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $9}')
-    yesterday_rx=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $2}')
-    yesterday_rxv=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $3}')
-    yesterday_tx=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $5}')
-    yesterday_txv=$(vnstat -i ${vnstat_profile} | grep yesterday | awk '{print $6}')
-else
-    yesterday=NULL
-    yesterday_v=NULL
-    yesterday_rx=NULL
-    yesterday_rxv=NULL
-    yesterday_tx=NULL
-    yesterday_txv=NULL
-fi
-
-# // SSH Websocket Proxy
-ssh_ws=$( systemctl status ws-stunnel | grep Active | awk '{print $3}' | sed 's/(//g' | sed 's/)//g' )
-if [[ $ssh_ws == "running" ]]; then
-    status_ws="${COLOR1}ON${NC}"
-else
-    status_ws="${RED}OFF${NC}"
-fi
-
-# // nginx
-nginx=$( systemctl status nginx | grep Active | awk '{print $3}' | sed 's/(//g' | sed 's/)//g' )
-if [[ $nginx == "running" ]]; then
-    status_nginx="${COLOR1}ON${NC}"
-else
-    status_nginx="${RED}OFF${NC}"
-    systemctl start nginx
-fi
-
-# // Dropbear
-dropbear_status=$(/etc/init.d/dropbear status | grep Active | awk '{print $3}' | cut -d "(" -f2 | cut -d ")" -f1)
-if [[ $dropbear_status == "running" ]]; then
-   status_beruangjatuh="${COLOR1}ON${NC}"
-else
-   status_beruangjatuh="${RED}OFF${NC}"
-fi
-
-# // SSH Websocket Proxy
-xray=$(systemctl status xray | grep Active | awk '{print $3}' | cut -d "(" -f2 | cut -d ")" -f1)
-if [[ $xray == "running" ]]; then
-    status_xray="${COLOR1}ON${NC}"
-else
-    status_xray="${RED}OFF${NC}"
-fi
-# STATUS EXPIRED ACTIVE
-Green_font_prefix="\033[32m" && Red_font_prefix="\033[31m" && Green_background_prefix="\033[42;37m" && Red_background_prefix="\033[4$below" && Font_color_suffix="\033[0m"
-Info="${Green_font_prefix}( Registered )${Font_color_suffix}"
-Error="${Green_font_prefix}${Font_color_suffix}${Red_font_prefix}[ EXPIRED ]${Font_color_suffix}"
-
-today=$(date -d "0 days" +"%Y-%m-%d")
-if [[ $today < $Exp2 ]]; then
-    sts="${Info}"
-else
-    sts="${Error}"
-fi
-# TOTAL ACC CREATE VMESS WS
-vmess=$(grep -c -E "^#vmg " "/etc/xray/config.json")
-# TOTAL ACC CREATE  VLESS WS
-vless=$(grep -c -E "^#vlg " "/etc/xray/config.json")
-# TOTAL ACC CREATE  TROJAN
-trtls=$(grep -c -E "^#trg " "/etc/xray/config.json")
-# TOTAL ACC CREATE OVPN SSH
-total_ssh=$(grep -c -E "^### " "/etc/xray/ssh")
-#total_ssh="$(awk -F: '$3 >= 1000 && $1 != "nobody" {print $1}' /etc/passwd | wc -l)"
-
-# Main Display
-clear
-get_sys_info
-get_net_info
-clear
-clear && clear && clear
-clear;clear;clear
-echo -e "$COLOR1╭═══════════════════════════════════════════════╮${NC}"
-echo -e "$COLOR1│${NC} ${COLBG1}         ${WH}• RAKUS PREMIUM •            ${NC} $COLOR1│ $NC"
-echo -e "$COLOR1╰═══════════════════════════════════════════════╯${NC}"
-echo -e "$COLOR1╭═══════════════════════════════════════════════════╮${NC}"
-echo -e "$COLOR1│ $NC${WH}❈ System OS          ${COLOR1}: ${WH}$MODEL2"
-echo -e "$COLOR1│ $NC${WH}❈ Memory Usage       ${COLOR1}: ${WH}$uram - $tram"
-echo -e "$COLOR1│ $NC${WH}❈ Core & CPU Usage   ${COLOR1}: ${WH}$CORE GB & $cpu_usage"
-echo -e "$COLOR1│ $NC${WH}❈ ISP                ${COLOR1}: ${WH}$ISP"
-echo -e "$COLOR1│ $NC${WH}❈ City               ${COLOR1}: ${WH}$CITY"
-echo -e "$COLOR1│ $NC${WH}❈ Domain             ${COLOR1}: ${WH}$(cat /etc/xray/domain)"
-echo -e "$COLOR1│ $NC${WH}❈ IP-VPS             ${COLOR1}: ${WH}$IPVPS${NC}"
-echo -e "$COLOR1│ $NC${WH}❈ Uptime             ${COLOR1}: ${WH}$SERONLINE${NC}"
-echo -e "$COLOR1╰═══════════════════════════════════════════════════╯${NC}"
-echo -e "$COLOR1╭═════════════════ • ${NC}${WH}STATUS SERVER${NC}${COLOR1} • ═══════════════╮${NC}"
-echo -e " ${WH} SSH WS : ${status_ws} ${WH} XRAY : ${status_xray} ${WH} NGINX : ${status_nginx} ${WH} DROPBEAR : ${status_beruangjatuh}$NC"
-echo -e "$COLOR1╰═══════════════════════════════════════════════════╯${NC}"
-echo -e "   $COLOR1╭════════════════════════════════════════════╮${NC}"
-echo -e "            $COLOR1$NC${WH}    LIST ACCOUNT PREMIUM ${NC}"
-echo -e "   $COLOR1      ═════════════════════════════════ ${NC}"
-echo -e "            $COLOR1$NC${WH}    SSH     =  ${COLOR1}$total_ssh ${NC}${WH} ACCOUNT ${NC}"
-echo -e "            $COLOR1$NC${WH}    VMESS   =  ${COLOR1}$vmess ${NC}${WH} ACCOUNT ${NC}"
-echo -e "            $COLOR1$NC${WH}    VLESS   =  ${COLOR1}$vless ${NC}${WH} ACCOUNT ${NC}"
-echo -e "            $COLOR1$NC${WH}    TROJAN  =  ${COLOR1}$trtls ${NC}${WH} ACCOUNT${NC}"
-echo -e "   $COLOR1╰═════════════════════════════════════════════╯${NC}"
-echo -e "$COLOR1╭═══════════════════ • ${NC}${WH}LIST MENU${NC}${COLOR1} • ═════════════════╮${NC}"
-echo -e "$COLOR1│                                                   $COLOR1│ $NC"
-echo -e "$COLOR1│ ${WH}[${COLOR1}01${WH}]${NC} ${COLOR1}• ${WH}SSH VPN  ${WH}[${COLOR1}Menu${WH}]     ${WH}[${COLOR1}06${WH}]${NC} ${COLOR1}• ${WH}RUNNING  ${WH}[${COLOR1}Menu${WH}]$COLOR1 │ $NC"
-echo -e "$COLOR1│ ${WH}[${COLOR1}02${WH}]${NC} ${COLOR1}• ${WH}VMESS    ${WH}[${COLOR1}Menu${WH}]     ${WH}[${COLOR1}07${WH}]${NC} ${COLOR1}• ${WH}RESTART  ${WH}[${COLOR1}Menu${WH}]$COLOR1 │ $NC"
-echo -e "$COLOR1│ ${WH}[${COLOR1}03${WH}]${NC} ${COLOR1}• ${WH}VLESS    ${WH}[${COLOR1}Menu${WH}]     ${WH}[${COLOR1}08${WH}]${NC} ${COLOR1}• ${WH}REBOOT   ${WH}[${COLOR1}Menu${WH}]$COLOR1 │ $NC"
-echo -e "$COLOR1│ ${WH}[${COLOR1}04${WH}]${NC} ${COLOR1}• ${WH}TRJAN    ${WH}[${COLOR1}Menu${WH}]     ${WH}[${COLOR1}09${WH}]${NC} ${COLOR1}• ${WH}UPDATE   ${WH}[${COLOR1}Menu${WH}]$COLOR1 │ $NC"
-echo -e "$COLOR1│ ${WH}[${COLOR1}05${WH}]${NC} ${COLOR1}• ${WH}BACKUP   ${WH}[${COLOR1}Menu${WH}]     ${WH}[${COLOR1}10${WH}]${NC} ${COLOR1}• ${WH}SETTING  ${WH}[${COLOR1}Menu${WH}]$COLOR1 │ $NC"
-echo -e "$COLOR1│                                                   $COLOR1│ $NC"
-echo -e "${BLUE}╭═══════${PURPLE}══════ • ${GREEN}CHECK USER ONLINE${YELLOW} • ${RED}═══════════════╮${NC}"
-echo -e "${CYAN}│PILIH NOMOR${NC} ${MAGENTA}[12] ${YELLOW}🔍 MELIHAT STATUS USER YANG ONLINE${NC}│"
-echo -e "${YELLOW}╰══${GREEN}==================${BLUE}══=======${PURPLE}══════════════════════${RED}╯${NC}"
-
-echo -e "${MAGENTA}╭═══════${CYAN}══════ • ${RED}GENOM SCRIPT PRO${BLUE} • ${GREEN}═══════════════╮${NC}"
-echo -e "${YELLOW}│PILIH NOMOR${NC} ${CYAN}  [15]    ${WH}🧬 AKSESS GENOM PRO ADMIN 🧬${NC}│"
-echo -e "${BLUE}╰══${RED}==================${GREEN}══=======${CYAN}══════════════════════${MAGENTA}╯${NC}"
-echo -e "$COLOR1│                                                   $COLOR1│ $NC"
-echo -e "$COLOR1╰═══════════════════════════════════════════════════╯${NC}"
-echo -e "$COLOR1╭═══════════════════════════════════════════════════╮${NC}"
-echo -e "$COLOR1│ ${WH}Traffic${NC}      ${WH}Today     Yesterday       Month       ${NC}"
-echo -e "$COLOR1│ ${COLOR1}Total${NC}    ${COLOR1}  $todayd $today_v    $yesterday $yesterday_v     $month $month_v$COLOR1  ${NC} "
-echo -e "$COLOR1╰═══════════════════════════════════════════════════╯${NC}"
-
-echo -e "$COLOR1╭═══════════════════════════════════════════════════╮${NC}"
-echo -e "$COLOR1│ $NC ${WH}Versi Script  ${COLOR1}: ${WH}$(cat /opt/.ver) Latest Version${NC}$COLOR1"
-echo -e "$COLOR1│ $NC ${WH}Author        ${COLOR1}: ${WH}RAKUS STORE${NC}$COLOR1"
-echo -e "$COLOR1│ $NC ${WH}Client        ${COLOR1}: ${WH}$client_name${NC}"
-echo -e "$COLOR1│ $NC ${WH}Sisa Hari     ${COLOR1}: ${WH}$days_remaining hari${NC}"
-echo -e "$COLOR1│ $NC ${WH}Expire Date   ${COLOR1}: ${WH}$exp_date${NC}"
-echo -e "$COLOR1╰═══════════════════════════════════════════════════╯${NC}"
-echo -e ""
-echo -ne " ${WH}Select menu ${COLOR1}: ${WH}"; read opt
+kn_top
+kn_title_r "KANCIL ECEM PREMIUM"
+kn_title "$KN_BRAND"
+kn_mid
+kn_row "OS" "$MODEL2"
+kn_row "RAM" "$RAM_USED / $RAM_TOT"
+kn_row "CPU" "$CPU_USE ($CORE core)"
+kn_row "IP VPS" "$IP_VPS"
+kn_row "Domain" "$DOMAIN"
+kn_row "Lokasi" "$CITY"
+kn_row "ISP" "$ISP"
+kn_row "Uptime" "$SERONLINE"
+kn_mid
+printf '%b│%b %bXRAY%b %b   %bNGINX%b %b   %bSSH-WS%b %b\n' "$COLOR1" "$NC" "$WH" "$NC" "$st_xray" "$WH" "$NC" "$st_nginx" "$WH" "$NC" "$st_ws"
+printf '%b│%b %bDROPBEAR%b %b   %bBOT TG%b %b\n' "$COLOR1" "$NC" "$WH" "$NC" "$st_db" "$WH" "$NC" "$st_bot"
+kn_mid
+kn_row "Akaun" "SSH $n_ssh | VMESS $n_vmess"
+kn_cont "VLESS $n_vless | TROJAN $n_trojan"
+kn_mid
+kn_item2 "01" "SSH VPN"  "06" "RUNNING"
+kn_item2 "02" "VMESS"    "07" "RESTART"
+kn_item2 "03" "VLESS"    "08" "REBOOT"
+kn_item2 "04" "TROJAN"   "09" "UPDATE"
+kn_item2 "05" "BACKUP"   "10" "SETTING"
+kn_item2 "11" "BOT TG"   "12" "ONLINE"
+kn_item1 "00" "KELUAR"
+kn_mid
+kn_row "Trafik" "hari ini $T_DAY"
+kn_cont "bulan ini $T_MON"
+kn_row "Client" "$client_name"
+kn_row "Lesen" "$days_remaining hari lagi ($exp_date)"
+kn_row "Versi" "$(cat /opt/.ver 2>/dev/null || echo -)"
+kn_mid
+kn_title_r "$KN_BRAND"
+kn_bot
+echo ""
+echo -ne " ${WH}Pilih menu ${COLOR1}: ${WH}"; read -r opt
+echo -ne "${NC}"
 case $opt in
 01 | 1) clear ; sshws ;;
 02 | 2) clear ; m-vmess ;;
 03 | 3) clear ; m-vless ;;
 04 | 4) clear ; m-trojan ;;
-05 | 5) clear ; menu-backup;;
+05 | 5) clear ; menu-backup ;;
 06 | 6) clear ; cekservice ;;
 07 | 7) clear ; running ;;
-08 | 8) clear ; reboot ;;
+08 | 8) clear ; kn_reboot ;;
 09 | 9) clear ; m-update ;;
 10 | 10) clear ; system ;;
-11 | 11) clear ; menu-backup;;
-12 | 12) clear ; online;;
-15 | 15) clear ; admin;;
-00 | 0) clear ; menu ;;
+11 | 11) bot_menu ; menu ;;
+12 | 12) clear ; online ;;
+15 | 15) clear ; admin ;;
+00 | 0 | x | X) clear ; exit 0 ;;
 *) clear ; menu ;;
 esac

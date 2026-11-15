@@ -522,7 +522,7 @@ def ssh_renew(user, days):
 
 # ---------------------------------------------------------------- mesej
 def vless_msg(user, uid, exp, extra=""):
-    t = ["<b>VLESS siap</b>", "User   : %s" % code(user), "UUID   : %s" % code(uid),
+    t = ["<b>VLESS siap</b>  ✦ kancil ecem", "User   : %s" % code(user), "UUID   : %s" % code(uid),
          "Luput  : %s (%d hari)" % (E(exp), days_left(exp))]
     if extra:
         t.append(E(extra))
@@ -533,9 +533,9 @@ def vless_msg(user, uid, exp, extra=""):
 
 
 def ssh_msg(user, pw, exp, ip):
-    return "\n".join(["<b>SSH siap</b>", "User     : %s" % code(user), "Password : %s" % code(pw),
+    return "\n".join(["<b>SSH siap</b>  ✦ kancil ecem", "User     : %s" % code(user), "Password : %s" % code(pw),
                       "Host     : %s" % code(domain()), "Luput    : %s (%d hari)" % (E(exp), days_left(exp)),
-                      "Had IP   : %d" % ip, "", "<pre>%s</pre>" % E(SSH_PORTS)])
+                      "Had IP   : %d" % ip, "", "<pre>%s</pre>" % E(SSH_PORTS), "", "Developer by kancil ecem"])
 
 
 def list_msg():
@@ -550,13 +550,14 @@ def list_msg():
 
 
 def status_msg():
-    t = ["<b>Status VPS</b>"]
+    t = ["<b>Status VPS</b>  ✦ kancil ecem"]
     for svc in ("xray", "nginx", "dropbear", "stunnel4", "ws-stunnel"):
         a = run(["systemctl", "is-active", svc]).stdout.strip()
         t.append("%s %s" % ("✅" if a == "active" else "❌", svc))
     t.append("")
     t.append("Domain: %s" % code(domain()))
     t.append("Akaun: VLESS %d, SSH %d" % (len(vless_users()), len(ssh_users())))
+    t += ["", "Developer by kancil ecem"]
     return "\n".join(t)
 
 
@@ -699,7 +700,7 @@ def on_command(chat, text):
     a = parts[1:]
     if cmd in ("/start", "/menu"):
         STATE.pop(chat, None)
-        send(chat, "Pilih:", MAIN_KB)
+        send(chat, "✦ <b>KANCIL ECEM</b> ✦\nDeveloper by kancil ecem\n\nPilih:", MAIN_KB)
     elif cmd == "/bantuan":
         send(chat, "\n".join([
             "<b>Arahan</b>", "/menu - butang utama",

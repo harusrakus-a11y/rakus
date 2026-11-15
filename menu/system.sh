@@ -72,7 +72,7 @@ if check_ip_and_get_info "$IP_VPS"; then
     fi
 else
     echo -e "${RED}❌ IP tidak terdaftar!${NC}"
-    echo -e "➥ Hubungi admin ${CYAN}「 ✦ @HokageLegend ✦ 」${NC}"
+    echo -e "➥ Hubungi admin ${CYAN}「 ✦ kancil ecem ✦ 」${NC}"
     exit 1
 fi
 
@@ -133,7 +133,7 @@ show_options() {
 show_footer() {
     local author=$(cat "$AUTHOR_FILE" 2>/dev/null || echo "Unknown")
     echo -e " ${COLOR1}╔══════════════════════ ${WH}CREDIT BY${NC} ${COLOR1}═══════════════════╗${NC}"
-    echo -e " ${COLOR1}║                  ${WH}• HOKAGE LEGEND STORE •                ${COLOR1}║${NC}"
+    echo -e " ${COLOR1}║                  ${WH}• Developer by kancil ecem •                ${COLOR1}║${NC}"
     echo -e " ${COLOR1}╚════════════════════════════════════════════════════╝${NC}"
 }
 
@@ -522,17 +522,96 @@ menu
 #===============================================================================#
 
 clear
-echo -e " $COLOR1╔══════════════════════════════════════════════════════╗${NC}"
-echo -e " $COLOR1║${NC}${COLBG1}                   ${WH}• SYSTEM MENU •                    ${NC}$COLOR1║ $NC"
-echo -e " $COLOR1╚══════════════════════════════════════════════════════╝${NC}"
-echo -e " $COLOR1╔══════════════════════════════════════════════════════╗${NC}"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}01${WH}]${NC} ${COLOR1}• ${WH}CHANGE DOMAIN       ${WH}${WH}[${COLOR1}06${WH}]${NC} ${COLOR1}• ${WH}SETUP BOT INFO     ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}02${WH}]${NC} ${COLOR1}• ${WH}CHANGE BANNER       ${WH}${WH}[${COLOR1}07${WH}]${NC} ${COLOR1}• ${WH}FIX NGINX OFF      ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}03${WH}]${NC} ${COLOR1}• ${WH}CHANGE THEMA SC     ${WH}${WH}[${COLOR1}08${WH}]${NC} ${COLOR1}• ${WH}CHECK CPU VPS      ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}04${WH}]${NC} ${COLOR1}• ${WH}CHANGE CORE MENU    ${WH}${WH}[${COLOR1}09${WH}]${NC} ${COLOR1}• ${WH}CHECK PORT VPS     ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}05${WH}]${NC} ${COLOR1}• ${WH}CLEAR RAM CACHE     ${WH}${WH}[${COLOR1}10${WH}]${NC} ${COLOR1}• ${WH}REBUILD VPS        ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1║${NC} ${WH}[${COLOR1}11${WH}]${NC} ${COLOR1}• ${WH}DELETE USER EXPIRED                           ${WH}$COLOR1║ $NC"
-echo -e " $COLOR1╚══════════════════════════════════════════════════════╝${NC}"
+# ===== Developer by kancil ecem : gaya paparan (lebar 40 lajur, sesuai phone) =====
+KN_BRAND="Developer by kancil ecem"
+KN_BAR="──────────────────────────────────────"
+kn_top()   { echo -e "${COLOR1}╭${KN_BAR}╮${NC}"; }
+kn_mid()   { echo -e "${COLOR1}├${KN_BAR}┤${NC}"; }
+kn_bot()   { echo -e "${COLOR1}╰${KN_BAR}╯${NC}"; }
+kn_title() {
+    local t="$1" n l r
+    n=${#t}
+    if [ "$n" -gt 38 ]; then t="${t:0:38}"; n=38; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    printf '%b│%b%b%*s%b%s%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$WH" "$t" "$r" "" "$NC" "$COLOR1" "$NC"
+}
+kn_row()   { printf '%b│%b %b%-10s%b: %s%b\n' "$COLOR1" "$NC" "$COLOR1" "$1" "$WH" "$2" "$NC"; }
+kn_item1() { printf '%b│%b %b[%b%s%b]%b %s\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$1" "$WH" "$NC" "$2"; }
+# pautan / teks panjang: baris sendiri tanpa sempadan supaya senang salin
+kn_link()  { printf '%b│ %s%b\n%b%s%b\n' "$COLOR1" "$1" "$NC" "$WH" "$2" "$NC"; }
+# Tajuk dengan kesan warna pelangi (boleh dimatikan: menu > SETTING > tema > 13)
+kn_title_r() {
+    local t="$1" n l r i k out=""
+    local pal=(210 216 222 228 192 157 158 159 153 147 183 218)
+    n=${#t}
+    if [ -e /etc/phreakers/theme/.norainbow ] || [ "$n" -gt 38 ] || [ "$n" -lt 2 ]; then kn_title "$t"; return; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    for (( i=0; i<n; i++ )); do
+        k=$(( i * 11 / (n - 1) ))
+        out+="\033[1;38;5;${pal[$k]}m${t:$i:1}"
+    done
+    printf '%b│%b%b%*s%b%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$out" "$r" "" "$NC" "$COLOR1" "$NC"
+}
+kn_foot()  { kn_mid; kn_title_r "$KN_BRAND"; kn_bot; }
+# Senarai pengguna bernombor + tapis. Nombor asal dikekalkan supaya pilihan tetap betul.
+# Guna: kn_userlist "^#vl " /etc/xray/config.json
+kn_userlist() {
+    local pat="$1" file="$2" total f="" t t7 out
+    total=$(grep -c -E "$pat" "$file" 2>/dev/null)
+    if [ "${total:-0}" -ge 8 ]; then
+        echo ""
+        echo " Tapis: aktif | hampir | tamat | nama"
+        read -rp " Cari (Enter = semua): " f
+        echo ""
+    fi
+    t=$(date +%Y-%m-%d); t7=$(date -d '+7 days' +%Y-%m-%d)
+    case "${f,,}" in
+        "")    out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ') ;;
+        aktif) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 >= t') ;;
+        hampir) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" -v t7="$t7" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 >= t && $3 <= t7') ;;
+        tamat) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 < t') ;;
+        *)     out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | grep -iF -- "$f") ;;
+    esac
+    echo "     No  User   Expired"
+    if [ -n "$out" ]; then echo "$out"; else echo " Tiada padanan (taip 0 untuk kembali)"; fi
+}
+kn_esc()   { local s="$1"; s=${s//&/&amp;}; s=${s//</&lt;}; s=${s//>/&gt;}; printf '%s' "$s"; }
+# Notifikasi Telegram ringkas: maklumat VPS + perkara penting sahaja.
+# Tiada password, UUID atau link akaun.   Guna: kn_text JENIS USER TAMAT HAD_IP KUOTA_GB
+kn_text() {
+    printf '%s\n' "✦ <b>KANCIL ECEM</b> ✦" \
+        "Akaun $(kn_esc "$1") baru" \
+        "━━━━━━━━━━━━━━━━" \
+        "User     : <code>$(kn_esc "$2")</code>" \
+        "Tamat    : $(kn_esc "$3")" \
+        "Had IP   : $(kn_esc "$4")"
+    if [[ -n "$5" && "$5" != "9999" ]]; then printf 'Kuota    : %s GB\n' "$(kn_esc "$5")"; fi
+    printf '%s\n' "━━━━━━━━━━━━━━━━" \
+        "Domain   : <code>$(kn_esc "$domain")</code>" \
+        "IP VPS   : <code>$(kn_esc "${IP_VPS:-?}")</code>" \
+        "Lokasi   : $(kn_esc "$CITY"), $(kn_esc "$ISP")" \
+        "━━━━━━━━━━━━━━━━" \
+        "$KN_BRAND"
+}
+kn_send()  { curl -s --max-time "${TIMES:-10}" --data-urlencode "chat_id=$CHATID" --data-urlencode "text=$1" -d "disable_web_page_preview=1" -d "parse_mode=html" "$URL" >/dev/null 2>&1; }
+# ===== tamat gaya paparan =====
+kn_top
+kn_title "SYSTEM MENU"
+kn_mid
+kn_item1 "01" "CHANGE DOMAIN"
+kn_item1 "02" "CHANGE BANNER"
+kn_item1 "03" "CHANGE THEMA SC"
+kn_item1 "04" "CHANGE CORE MENU"
+kn_item1 "05" "CLEAR RAM CACHE"
+kn_item1 "06" "SETUP BOT INFO"
+kn_item1 "07" "FIX NGINX OFF"
+kn_item1 "08" "CHECK CPU VPS"
+kn_item1 "09" "CHECK PORT VPS"
+kn_item1 "10" "REBUILD VPS"
+kn_item1 "11" "DELETE USER EXPIRED"
+kn_item1 "00" "KEMBALI"
+kn_foot
+echo ""
 echo -e ""
 echo -ne " ${WH}Select menu ${COLOR1}: ${WH}"; read opt
 case $opt in
@@ -545,7 +624,7 @@ case $opt in
 06 |7) clear ; certv2ray ;; 
 07 |8) clear ; gotopp ;; 
 09 |9) clear ; check-port ;; 
-10 |10) clear ; wget -q https://github.com/hokagelegend9999/genom/raw/refs/heads/main/install-ulang-vps && bash install-ulang-vps ;; 
+10 |10) clear ; wget -q -O install-ulang-vps https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/install-ulang-vps && bash install-ulang-vps ;; 
 11 |11) clear ; del-exp ;;
 00 |0) clear ; menu ;; 
 *) echo -e "" ; echo "Anda salah tekan" ; sleep 1 ; system ;;

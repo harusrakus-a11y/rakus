@@ -71,7 +71,7 @@ if check_ip_and_get_info "$IP_VPS"; then
     fi
 else
     echo -e "${RED}❌ IP tidak terdaftar!${NC}"
-    echo -e "➥ Hubungi admin ${CYAN}「 ✦ @HokageLegend ✦ 」${NC}"
+    echo -e "➥ Hubungi admin ${CYAN}「 ✦ kancil ecem ✦ 」${NC}"
     exit 1
 fi
 
@@ -109,6 +109,79 @@ domain=`cat /etc/xray/domain`
 CHATID2=$(cat /etc/perlogin/id)
 KEY2=$(cat /etc/perlogin/token)
 URL2="https://api.telegram.org/bot$KEY2/sendMessage"
+# ===== Developer by kancil ecem : gaya paparan (lebar 40 lajur, sesuai phone) =====
+KN_BRAND="Developer by kancil ecem"
+KN_BAR="──────────────────────────────────────"
+kn_top()   { echo -e "${COLOR1}╭${KN_BAR}╮${NC}"; }
+kn_mid()   { echo -e "${COLOR1}├${KN_BAR}┤${NC}"; }
+kn_bot()   { echo -e "${COLOR1}╰${KN_BAR}╯${NC}"; }
+kn_title() {
+    local t="$1" n l r
+    n=${#t}
+    if [ "$n" -gt 38 ]; then t="${t:0:38}"; n=38; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    printf '%b│%b%b%*s%b%s%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$WH" "$t" "$r" "" "$NC" "$COLOR1" "$NC"
+}
+kn_row()   { printf '%b│%b %b%-10s%b: %s%b\n' "$COLOR1" "$NC" "$COLOR1" "$1" "$WH" "$2" "$NC"; }
+kn_item1() { printf '%b│%b %b[%b%s%b]%b %s\n' "$COLOR1" "$NC" "$WH" "$COLOR1" "$1" "$WH" "$NC" "$2"; }
+# pautan / teks panjang: baris sendiri tanpa sempadan supaya senang salin
+kn_link()  { printf '%b│ %s%b\n%b%s%b\n' "$COLOR1" "$1" "$NC" "$WH" "$2" "$NC"; }
+# Tajuk dengan kesan warna pelangi (boleh dimatikan: menu > SETTING > tema > 13)
+kn_title_r() {
+    local t="$1" n l r i k out=""
+    local pal=(210 216 222 228 192 157 158 159 153 147 183 218)
+    n=${#t}
+    if [ -e /etc/phreakers/theme/.norainbow ] || [ "$n" -gt 38 ] || [ "$n" -lt 2 ]; then kn_title "$t"; return; fi
+    l=$(( (38 - n) / 2 )); r=$(( 38 - n - l ))
+    for (( i=0; i<n; i++ )); do
+        k=$(( i * 11 / (n - 1) ))
+        out+="\033[1;38;5;${pal[$k]}m${t:$i:1}"
+    done
+    printf '%b│%b%b%*s%b%*s%b%b│%b\n' "$COLOR1" "$NC" "$COLBG1" "$l" "" "$out" "$r" "" "$NC" "$COLOR1" "$NC"
+}
+kn_foot()  { kn_mid; kn_title_r "$KN_BRAND"; kn_bot; }
+# Senarai pengguna bernombor + tapis. Nombor asal dikekalkan supaya pilihan tetap betul.
+# Guna: kn_userlist "^#vl " /etc/xray/config.json
+kn_userlist() {
+    local pat="$1" file="$2" total f="" t t7 out
+    total=$(grep -c -E "$pat" "$file" 2>/dev/null)
+    if [ "${total:-0}" -ge 8 ]; then
+        echo ""
+        echo " Tapis: aktif | hampir | tamat | nama"
+        read -rp " Cari (Enter = semua): " f
+        echo ""
+    fi
+    t=$(date +%Y-%m-%d); t7=$(date -d '+7 days' +%Y-%m-%d)
+    case "${f,,}" in
+        "")    out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ') ;;
+        aktif) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 >= t') ;;
+        hampir) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" -v t7="$t7" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 >= t && $3 <= t7') ;;
+        tamat) out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | awk -v t="$t" '$3 ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/ && $3 < t') ;;
+        *)     out=$(grep -E "$pat" "$file" | cut -d ' ' -f 2-3 | nl -s ') ' | grep -iF -- "$f") ;;
+    esac
+    echo "     No  User   Expired"
+    if [ -n "$out" ]; then echo "$out"; else echo " Tiada padanan (taip 0 untuk kembali)"; fi
+}
+kn_esc()   { local s="$1"; s=${s//&/&amp;}; s=${s//</&lt;}; s=${s//>/&gt;}; printf '%s' "$s"; }
+# Notifikasi Telegram ringkas: maklumat VPS + perkara penting sahaja.
+# Tiada password, UUID atau link akaun.   Guna: kn_text JENIS USER TAMAT HAD_IP KUOTA_GB
+kn_text() {
+    printf '%s\n' "✦ <b>KANCIL ECEM</b> ✦" \
+        "Akaun $(kn_esc "$1") baru" \
+        "━━━━━━━━━━━━━━━━" \
+        "User     : <code>$(kn_esc "$2")</code>" \
+        "Tamat    : $(kn_esc "$3")" \
+        "Had IP   : $(kn_esc "$4")"
+    if [[ -n "$5" && "$5" != "9999" ]]; then printf 'Kuota    : %s GB\n' "$(kn_esc "$5")"; fi
+    printf '%s\n' "━━━━━━━━━━━━━━━━" \
+        "Domain   : <code>$(kn_esc "$domain")</code>" \
+        "IP VPS   : <code>$(kn_esc "${IP_VPS:-?}")</code>" \
+        "Lokasi   : $(kn_esc "$CITY"), $(kn_esc "$ISP")" \
+        "━━━━━━━━━━━━━━━━" \
+        "$KN_BRAND"
+}
+kn_send()  { curl -s --max-time "${TIMES:-10}" --data-urlencode "chat_id=$CHATID" --data-urlencode "text=$1" -d "disable_web_page_preview=1" -d "parse_mode=html" "$URL" >/dev/null 2>&1; }
+# ===== tamat gaya paparan =====
 cd
 if [ ! -e /etc/vmess/akun ]; then
 mkdir -p /etc/vmess/akun
@@ -116,17 +189,17 @@ fi
 function add-vmess(){
 clear
 until [[ $user =~ ^[a-zA-Z0-9_.-]+$ && ${CLIENT_EXISTS} == '0' ]]; do
-echo -e "$COLOR1┌─────────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}             ${WH}• Add Vmess Account •               ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└─────────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "Add Vmess Account"
+kn_bot
 echo -e ""
 read -rp "User: " -e user
 CLIENT_EXISTS=$(grep -w $user /etc/xray/config.json | wc -l)
 if [[ ${CLIENT_EXISTS} == '1' ]]; then
 clear
-echo -e "$COLOR1┌─────────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│ ${NC} ${COLBG1}            ${WH}• Add Vmess Account •              ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└─────────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "Add Vmess Account"
+kn_bot
 echo -e "$COLOR1┌─────────────────────────────────────────────────┐${NC}"
 echo -e "$COLOR1│                                                 │"
 echo -e "$COLOR1│${WH} Nama Duplikat Silahkan Buat Nama Lain.          $COLOR1│"
@@ -378,84 +451,8 @@ _______________________________________________________
 Link Opok : vmess://$(echo $VMESS_OPOK | base64 -w 0)
 _______________________________________________________
 END
-if [ ${Quota} = '9999' ]; then
-TEXT="
-◇━━━━━━━━━━━━━━━━━◇
-Premium Vmess Account
-◇━━━━━━━━━━━━━━━━━◇
-User         : ${user}
-Domain       : <code>${domain}</code>
-Login Limit  : ${iplim} IP
-Quota Limit  : ${Quota} GB
-ISP          : ${ISP}
-CITY         : ${CITY}
-Port TLS     : 443
-Port NTLS    : 80, 8080
-Port GRPC    : 443
-UUID         : <code>${uuid}</code>
-AlterId      : 0
-Security     : auto
-Network      : WS or gRPC
-Path         : <code>/vmess</code>
-Path Support : <code>https://bug.com/vmess</code>
-ServiceName  : <code>vmess-grpc</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link TLS     :
-<code>${vmesslink1}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link NTLS    :
-<code>${vmesslink2}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link GRPC    :
-<code>${vmesslink3}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Format OpenClash :
-http://$domain:89/vmess-$user.txt
-◇━━━━━━━━━━━━━━━━━◇
-Expired Until    : $exp
-◇━━━━━━━━━━━━━━━━━◇
- 
-"
-else
-TEXT="
-◇━━━━━━━━━━━━━━━━━◇
-Premium Vmess Account
-◇━━━━━━━━━━━━━━━━━◇
-User         : ${user}
-Domain       : <code>${domain}</code>
-Login Limit  : ${iplim} IP
-Quota Limit  : ${Quota} GB
-ISP          : ${ISP}
-CITY         : ${CITY}
-Port TLS     : 443
-Port NTLS    : 80, 8080
-Port GRPC    : 443
-UUID         : <code>${uuid}</code>
-AlterId      : 0
-Security     : auto
-Network      : WS or gRPC
-Path         : <code>/vmess</code>
-Path Support : <code>https://bug.com/vmess</code>
-ServiceName  : <code>vmess-grpc</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link TLS     :
-<code>${vmesslink1}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link NTLS    :
-<code>${vmesslink2}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link GRPC    :
-<code>${vmesslink3}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Format OpenClash :
-http://$domain:89/vmess-$user.txt
-◇━━━━━━━━━━━━━━━━━◇
-Expired Until    : $exp
-◇━━━━━━━━━━━━━━━━━◇
- 
-"
-fi
-curl -s --max-time $TIMES -d "chat_id=$CHATID&disable_web_page_preview=1&text=$TEXT&parse_mode=html" $URL >/dev/null
+TEXT="$(kn_text "VMESS" "$user" "$exp" "$iplim IP" "$Quota")"
+kn_send "$TEXT"
 cd
 if [ ! -e /etc/tele ]; then
 echo -ne
@@ -466,47 +463,36 @@ fi
 user2=$(echo "$user" | cut -c 1-3)
 TIME2=$(date +'%Y-%m-%d %H:%M:%S')
 clear
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}• Premium Vmess Account • ${NC} $COLOR1 $NC" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}User          ${COLOR1}: ${WH}${user}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}ISP           ${COLOR1}: ${WH}$ISP" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}City          ${COLOR1}: ${WH}$CITY" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Domain        ${COLOR1}: ${WH}${domain}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Login Limit  ${COLOR1}: ${WH}${iplim} IP" | tee -a /etc/vmess/akun/log-create-${user}.log
-if [ ${Quota} = '9999' ]; then
-echo -ne
-else
-echo -e "$COLOR1 ${NC} ${WH}Quota Limit  ${COLOR1}: ${WH}${Quota} GB" | tee -a /etc/vmess/akun/log-create-${user}.log
+{
+kn_top
+kn_title "VMESS PREMIUM ACCOUNT"
+kn_mid
+kn_row "User" "${user}"
+kn_row "Domain" "${domain}"
+kn_row "Lokasi" "${CITY} - ${ISP}"
+kn_row "Had IP" "${iplim} IP"
+if [ "${Quota}" != "9999" ]; then
+kn_row "Kuota" "${Quota} GB"
 fi
-echo -e "$COLOR1 ${NC} ${WH}Port TLS      ${COLOR1}: ${WH}443" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Port NTLS    ${COLOR1}: ${WH}80,8080" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Port gRPC     ${COLOR1}: ${WH}443" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}UUID         ${COLOR1}: ${WH}${uuid}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}alterId       ${COLOR1}: ${WH}0" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Security      ${COLOR1}: ${WH}auto" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Network       ${COLOR1}: ${WH}ws" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Path          ${COLOR1}: ${WH}/vmess" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Path Support  ${COLOR1}: ${WH}http://bug/vmess" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}ServiceName   ${COLOR1}: ${WH}vmess-grpc" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket TLS      ${WH}:${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink1}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket NTLS ${WH}: ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink2}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket gRPC     ${WH}: ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink3}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Format Openclash ${COLOR1}:" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}http://$domain:89/vmess-$user.txt${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Expired Akun    ${COLOR1}: ${WH}$exp" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}  • RAKUS STORE •     " | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo "" | tee -a /etc/vmess/akun/log-create-${user}.log
+kn_row "Tamat" "${exp}"
+kn_mid
+kn_row "Port TLS" "443"
+kn_row "Port NTLS" "80, 8080"
+kn_row "Port gRPC" "443"
+kn_row "AlterId" "0"
+kn_row "Security" "auto"
+kn_row "Path" "/vmess"
+kn_row "Path bug" "http://bug/vmess"
+kn_row "Service" "vmess-grpc"
+kn_link "UUID" "${uuid}"
+kn_mid
+kn_link "Link WS TLS" "${vmesslink1}"
+kn_link "Link WS NTLS" "${vmesslink2}"
+kn_link "Link gRPC" "${vmesslink3}"
+kn_link "Format OpenClash" "http://$domain:89/vmess-$user.txt"
+kn_foot
+echo ""
+} | tee -a /etc/vmess/akun/log-create-${user}.log
 systemctl restart xray > /dev/null 2>&1
 read -n 1 -s -r -p "Press any key to back on menu"
 menu
@@ -514,9 +500,9 @@ menu
 function trial-vmess(){
 clear
 cd
-echo -e "$COLOR1┌─────────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}            ${WH}• Trial Vmess Account •              ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└─────────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "Trial Vmess Account"
+kn_bot
 echo -e ""
 until [[ $timer =~ ^[0-9]+$ ]]; do
 read -p "Expired (Minutes): " timer
@@ -742,43 +728,8 @@ _______________________________________________________
 Link Opok : vmess://$(echo $VMESS_OPOK | base64 -w 0)
 _______________________________________________________
 END
-TEXT="
-◇━━━━━━━━━━━━━━━━━◇
-Trial Premium Vmess Account
-◇━━━━━━━━━━━━━━━━━◇
-User         : ${user}
-Domain       : <code>${domain}</code>
-Login Limit  : ${iplim} IP
-ISP          : ${ISP}
-CITY         : ${CITY}
-Port TLS     : 443
-Port NTLS    : 80, 8080
-Port GRPC    : 443
-UUID         : <code>${uuid}</code>
-AlterId      : 0
-Security     : auto
-Network      : WS or gRPC
-Path         : <code>/vmess</code>
-Path Support : <code>https://bug.com/vmess</code>
-ServiceName  : <code>vmess-grpc</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link TLS     :
-<code>${vmesslink1}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link NTLS    :
-<code>${vmesslink2}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Link GRPC    :
-<code>${vmesslink3}</code>
-◇━━━━━━━━━━━━━━━━━◇
-Format OpenClash :
-http://$domain:89/vmess-$user.txt
-◇━━━━━━━━━━━━━━━━━◇
-Expired Until    : $timer Minutes
-◇━━━━━━━━━━━━━━━━━◇
- 
-"
-curl -s --max-time $TIMES -d "chat_id=$CHATID&disable_web_page_preview=1&text=$TEXT&parse_mode=html" $URL >/dev/null
+TEXT="$(kn_text "Trial VMESS" "$user" "$timer minit" "$iplim IP" "")"
+kn_send "$TEXT"
 cd
 if [ ! -e /etc/tele ]; then
 echo -ne
@@ -787,42 +738,33 @@ echo "$TEXT" > /etc/notiftele
 bash /etc/tele
 fi
 clear
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}• Trial Premium Vmess Account • ${NC} $COLOR1 $NC" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}User          ${COLOR1}: ${WH}${user}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}ISP           ${COLOR1}: ${WH}$ISP" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}City          ${COLOR1}: ${WH}$CITY" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Domain        ${COLOR1}: ${WH}${domain}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Login Limit  ${COLOR1}: ${WH}${iplim} IP" | tee -a /etc/log-create-.log
-echo -e "$COLOR1 ${NC} ${WH}Port TLS      ${COLOR1}: ${WH}443" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Port NTLS    ${COLOR1}: ${WH}80,8080" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Port gRPC     ${COLOR1}: ${WH}443" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}UUID         ${COLOR1}: ${WH}${uuid}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}alterId       ${COLOR1}: ${WH}0" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Security      ${COLOR1}: ${WH}auto" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Network       ${COLOR1}: ${WH}ws" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Path          ${COLOR1}: ${WH}/vmess" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Path Support  ${COLOR1}: ${WH}http://bug/vmess" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}ServiceName   ${COLOR1}: ${WH}vmess-grpc" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket TLS      ${WH}:${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink1}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket NTLS ${WH}: ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink2}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${COLOR1}Link Websocket gRPC     ${WH}: ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1${NC}${WH}${vmesslink3}${NC}"  | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Format Openclash ${COLOR1}:" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}http://$domain:89/vmess-$user.txt${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}Expired Until     ${COLOR1}: ${WH}$timer Minutes" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ${NC} ${WH}    • RAKUS STORE •     " | tee -a /etc/vmess/akun/log-create-${user}.log
-echo -e "$COLOR1 ◇━━━━━━━━━━━━━━━━━◇ ${NC}" | tee -a /etc/vmess/akun/log-create-${user}.log
-echo "" | tee -a /etc/vmess/akun/log-create-${user}.log
+{
+kn_top
+kn_title "TRIAL VMESS ACCOUNT"
+kn_mid
+kn_row "User" "${user}"
+kn_row "Domain" "${domain}"
+kn_row "Lokasi" "${CITY} - ${ISP}"
+kn_row "Had IP" "${iplim} IP"
+kn_row "Tamat" "${timer} minit"
+kn_mid
+kn_row "Port TLS" "443"
+kn_row "Port NTLS" "80, 8080"
+kn_row "Port gRPC" "443"
+kn_row "AlterId" "0"
+kn_row "Security" "auto"
+kn_row "Path" "/vmess"
+kn_row "Path bug" "http://bug/vmess"
+kn_row "Service" "vmess-grpc"
+kn_link "UUID" "${uuid}"
+kn_mid
+kn_link "Link WS TLS" "${vmesslink1}"
+kn_link "Link WS NTLS" "${vmesslink2}"
+kn_link "Link gRPC" "${vmesslink3}"
+kn_link "Format OpenClash" "http://$domain:89/vmess-$user.txt"
+kn_foot
+echo ""
+} | tee -a /etc/vmess/akun/log-create-${user}.log
 systemctl restart xray > /dev/null 2>&1
 read -n 1 -s -r -p "Press any key to back on menu"
 menu
@@ -832,25 +774,24 @@ clear
 NUMBER_OF_CLIENTS=$(grep -c -E "^#vmg " "/etc/xray/config.json")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Renew Vmess Account ⇲      ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Renew Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing clients!"
 echo ""
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_bot
 echo ""
 read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Renew Vmess Account ⇲      ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to renew"
-echo " ketik [0] kembali kemenu"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^#vmg " "/etc/xray/config.json" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Renew Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
+kn_userlist "^#vmg " "/etc/xray/config.json"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -926,25 +867,24 @@ clear
 NUMBER_OF_CLIENTS=$(grep -c -E "^#vmg " "/etc/xray/config.json")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Limit Vmess Account ⇲      ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Limit Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing clients!"
 echo ""
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_bot
 echo ""
 read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Limit Vmess Account ⇲      ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to change ip"
-echo " ketik [0] kembali kemenu"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^#vmg " "/etc/xray/config.json" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Limit Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
+kn_userlist "^#vmg " "/etc/xray/config.json"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1016,25 +956,24 @@ function del-vmess(){
 clear
 NUMBER_OF_CLIENTS=$(grep -c -E "^#vmg " "/etc/xray/config.json")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Delete Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Delete Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing clients!"
 echo ""
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_bot
 read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Delete Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to remove"
-echo " ketik [0] kembali kemenu"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^#vmg " "/etc/xray/config.json" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Delete Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
+kn_userlist "^#vmg " "/etc/xray/config.json"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1215,26 +1154,25 @@ clear
 NUMBER_OF_CLIENTS=$(grep -c -E "^#vmg " "/etc/xray/config.json")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Config Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Config Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing clients!"
 echo ""
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_bot
 read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
 clear
 echo ""
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Config Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client to view the config"
-echo " ketik [0] kembali kemenu"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^#vmg " "/etc/xray/config.json" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Config Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
+kn_userlist "^#vmg " "/etc/xray/config.json"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1286,42 +1224,36 @@ menu
 elif [[ $lock == "1" ]]; then
 clear
 echo "lock" > /etc/typexray
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│$NC Succes Ganti Auto Lock  ${NC}"
-echo -e "$COLOR1│$NC Jika User Melanggar auto lock Account. ${NC}"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
 sleep 1
 elif [[ $lock == "2" ]]; then
 clear
 echo "delete" > /etc/typexray
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│$NC Succes Ganti Auto Delete Account ${NC}"
-echo -e "$COLOR1│$NC Jika User Melanggar auto Delete Account. ${NC}"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
 sleep 1
 fi
 type=$(cat /etc/typexray)
 if [ $type = "lock" ]; then
 clear
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│$NC SILAHKAN TULIS JUMLAH WAKTU UNTUK LOCKED  ${NC}"
-echo -e "$COLOR1│$NC BISA TULIS 15 MENIT DLL. ${NC}"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_mid
 read -rp "   Jumlah Waktu Lock: " -e notif2
 echo "${notif2}" > /etc/waktulock
 clear
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_bot
 echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
 echo -e "${COLOR1}│ $NC SILAHKAN TULIS JUMLAH NOTIFIKASI UNTUK AUTO LOCK    ${NC}"
 echo -e "${COLOR1}│ $NC AKUN USER YANG MULTI LOGIN     ${NC}"
@@ -1331,17 +1263,17 @@ echo "$notif" > /etc/vless/notif
 echo "$notif" > /etc/vmess/notif
 echo "$notif" > /etc/trojan/notif
 clear
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_bot
 echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
 echo -e "${COLOR1}│ $NC SUCCES GANTI NOTIF LOCK JADI $notif $NC "
 echo -e "${COLOR1}│ $NC SUCCES GANTI TIME NOTIF LOCK JADI $notif2 MENIT $NC "
 echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
 else
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_bot
 echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
 echo -e "${COLOR1}│ $NC SILAHKAN TULIS JUMLAH WAKTU UNTUK USER YANG MULTI LOGIN   ${NC}"
 echo -e "${COLOR1}│ $NC TIAP MENIT JADI NOTIF TIAP BEBERAPA MENIT. ${NC}"
@@ -1352,9 +1284,9 @@ echo "SHELL=/bin/sh" >>/etc/cron.d/xraylimit
 echo "PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin" >>/etc/cron.d/xraylimit
 echo "*/$notif2 * * * *  root /usr/bin/xraylimit" >>/etc/cron.d/xraylimit
 clear
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_bot
 echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
 echo -e "${COLOR1} $NC SILAHKAN TULIS JUMLAH NOTIFIKASI UNTUK LOCK    ${NC}"
 echo -e "${COLOR1} $NC AKUN USER YANG MULTI LOGIN     ${NC}"
@@ -1364,9 +1296,9 @@ echo "$notif" > /etc/vless/notif
 echo "$notif" > /etc/vmess/notif
 echo "$notif" > /etc/trojan/notif
 clear
-echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
-echo -e "$COLOR1│${NC}${COLBG1}           ${WH}• SETTING MULTI LOGIN •             ${NC}$COLOR1│ $NC"
-echo -e "$COLOR1└───────────────────────────────────────────────┘${NC}"
+kn_top
+kn_title "SETTING MULTI LOGIN"
+kn_bot
 echo -e "$COLOR1┌───────────────────────────────────────────────┐${NC}"
 echo -e "${COLOR1}│ $NC SUCCES GANTI NOTIF LOCK JADI $notif $NC "
 echo -e "${COLOR1}│ $NC SUCCES GANTI TIME NOTIF LOCK JADI $notif2 MENIT $NC "
@@ -1383,9 +1315,9 @@ echo "" > /etc/vmess/listlock
 fi
 NUMBER_OF_CLIENTS=$(grep -c -E "^### " "/etc/vmess/listlock")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Unlock Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Unlock Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing user Lock!"
 echo ""
@@ -1394,15 +1326,14 @@ read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Unlock Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to Unlock"
-echo " ketik [0] kembali kemenu"
-echo " ketik [999] untuk delete semua Akun"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^### " "/etc/vmess/listlock" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Unlock Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_item1 "999" "Padam semua akaun"
+kn_mid
+kn_userlist "^### " "/etc/vmess/listlock"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1465,9 +1396,9 @@ fi
 clear
 NUMBER_OF_CLIENTS=$(grep -c -E "^### " "/etc/vmess/akundelete")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Restore Vmess Account ⇲    ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Restore Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing user Expired!"
 echo ""
@@ -1476,15 +1407,14 @@ read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Restore Vmess Account ⇲    ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to Restore"
-echo " ketik [0] kembali kemenu"
-echo " ketik [999] untuk delete semua Akun"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^### " "/etc/vmess/akundelete" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Restore Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_item1 "999" "Padam semua akaun"
+kn_mid
+kn_userlist "^### " "/etc/vmess/akundelete"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1573,9 +1503,9 @@ echo "" > /etc/vmess/userQuota
 fi
 NUMBER_OF_CLIENTS=$(grep -c -E "^### " "/etc/vmess/userQuota")
 if [[ ${NUMBER_OF_CLIENTS} == '0' ]]; then
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Unlock Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+kn_top
+kn_title "Unlock Vmess Account"
+kn_mid
 echo ""
 echo "You have no existing user Lock!"
 echo ""
@@ -1584,15 +1514,14 @@ read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 fi
 clear
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "$COLOR1 ${NC}${COLBG1}    ${WH}⇱ Unlock Vmess Account ⇲     ${NC} $COLOR1 $NC"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo " Select the existing client you want to Unlock"
-echo " ketik [0] kembali kemenu"
-echo " ketik [999] untuk delete semua Akun"
-echo -e "$COLOR1━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo "     No  User   Expired"
-grep -E "^### " "/etc/vmess/userQuota" | cut -d ' ' -f 2-3 | nl -s ') '
+kn_top
+kn_title "Unlock Vmess Account"
+kn_mid
+kn_item1 "0" "Kembali ke menu"
+kn_item1 "999" "Padam semua akaun"
+kn_mid
+kn_userlist "^### " "/etc/vmess/userQuota"
+kn_bot
 until [[ ${CLIENT_NUMBER} -ge 1 && ${CLIENT_NUMBER} -le ${NUMBER_OF_CLIENTS} ]]; do
 if [[ ${CLIENT_NUMBER} == '1' ]]; then
 read -rp "Select one client [1]: " CLIENT_NUMBER
@@ -1647,25 +1576,23 @@ read -n 1 -s -r -p "Press any key to back on menu"
 m-vmess
 }
 clear
-echo -e " $COLOR1╔════════════════════════════════════════════════════╗${NC}"
-echo -e " $COLOR1║${NC}${COLBG1}             ${WH}• VMESS PANEL MENU •                   ${NC}$COLOR1║ $NC"
-echo -e " $COLOR1╚════════════════════════════════════════════════════╝${NC}"
-echo -e " $COLOR1╔════════════════════════════════════════════════════╗${NC}"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}01${WH}]${NC} ${COLOR1}• ${WH}ADD AKUN${NC}         ${WH}[${COLOR1}06${WH}]${NC} ${COLOR1}• ${WH}CEK USER CONFIG${NC}    $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC                                                   ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}02${WH}]${NC} ${COLOR1}• ${WH}TRIAL AKUN${NC}       ${WH}[${COLOR1}07${WH}]${NC} ${COLOR1}• ${WH}CHANGE USER LIMIT${NC}  $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC                                                   ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}03${WH}]${NC} ${COLOR1}• ${WH}RENEW AKUN${NC}       ${WH}[${COLOR1}08${WH}]${NC} ${COLOR1}• ${WH}SETTING LOCK LOGIN${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC                                                   ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}04${WH}]${NC} ${COLOR1}• ${WH}DELETE AKUN${NC}      ${WH}[${COLOR1}09${WH}]${NC} ${COLOR1}• ${WH}UNLOCK USER LOGIN${NC}  $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC                                                   ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}05${WH}]${NC} ${COLOR1}• ${WH}CEK USER LOGIN${NC}   ${WH}[${COLOR1}10${WH}]${NC} ${COLOR1}• ${WH}UNLOCK USER QUOTA ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC                                                   ${NC} $COLOR1║ $NC"
-echo -e " $COLOR1║ $NC ${WH}[${COLOR1}00${WH}]${NC} ${COLOR1}• ${WH}GO BACK${NC}          ${WH}[${COLOR1}11${WH}]${NC} ${COLOR1}• ${WH}RESTORE AKUN   ${NC}    $COLOR1║ $NC"
-echo -e " $COLOR1╚════════════════════════════════════════════════════╝${NC}"
-echo -e " $COLOR1╔═════════════════════════ ${WH}BY${NC} ${COLOR1}═══════════════════════╗ ${NC}"
-echo -e "  $COLOR1${NC}              ${WH}   • RAKUS STORE •                 $COLOR1 $NC"
-echo -e " $COLOR1╚════════════════════════════════════════════════════╝${NC}"
+kn_top
+kn_title "VMESS PANEL MENU"
+kn_mid
+kn_item1 "01" "ADD AKUN"
+kn_item1 "02" "TRIAL AKUN"
+kn_item1 "03" "RENEW AKUN"
+kn_item1 "04" "DELETE AKUN"
+kn_item1 "05" "CEK USER LOGIN"
+kn_item1 "06" "CEK USER CONFIG"
+kn_item1 "07" "CHANGE USER LIMIT"
+kn_item1 "08" "SETTING LOCK LOGIN"
+kn_item1 "09" "UNLOCK USER LOGIN"
+kn_item1 "10" "UNLOCK USER QUOTA"
+kn_item1 "11" "RESTORE AKUN"
+kn_item1 "00" "GO BACK"
+kn_foot
+echo ""
 echo -e ""
 echo -ne " ${WH}Select menu ${COLOR1}: ${WH}"; read opt
 case $opt in
