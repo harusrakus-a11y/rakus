@@ -136,6 +136,20 @@ add-tr
 fi
 done
 uuid=$(cat /proc/sys/kernel/random/uuid)
+read -rp "Password custom (kosong = auto): " cuuid
+while [[ -n $cuuid ]]; do
+if [[ $cuuid =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ || $cuuid =~ ^[A-Za-z0-9._-]{8,30}$ ]]; then
+if grep -qF "\"$cuuid\"" /etc/xray/config.json; then
+echo "Dah dipakai, cuba yang lain."
+else
+uuid=$cuuid
+break
+fi
+else
+echo "Tak sah. Guna UUID biasa (8-4-4-4-12) atau teks 8-30 aksara (A-Z a-z 0-9 . _ -)."
+fi
+read -rp "Password custom (kosong = auto): " cuuid
+done
 until [[ $masaaktif =~ ^[0-9]+$ ]]; do
 read -p "Expired (hari): " masaaktif
 done
