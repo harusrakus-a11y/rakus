@@ -323,48 +323,77 @@ parse_imbas() {   # fail -> baris: domain kali dari
         if [[ "$l" =~ $re ]]; then echo "${BASH_REMATCH[2]} ${BASH_REMATCH[3]} ${BASH_REMATCH[4]}"; fi
     done < <(tr -d '\r' < "$1" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g')
 }
+SSHO=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=10)
+rsh() { ssh "${SSHO[@]}" -p "$RPORT" "root@$RHOST" "$1"; }
+has_key() { [ -f "$HOME/.ssh/id_ed25519" ] || [ -f "$HOME/.ssh/id_rsa" ]; }
 t_imbas() {
-    local hp host port m pr secs akun tmp rc cand k i sel doms=() skipped=() d n lab cnt
+    local hp m pr secs akun tmp out rc k i sel cand=() doms=() skipped=() d n lab cnt x
     title "IMBAS DOMAIN DARI VPS"
     command -v ssh >/dev/null 2>&1 || { echo " ${R}ssh belum ada. Taip: pkg install openssh$N"; pause; return; }
     hp=$(get_vps) || { echo " ${R}Maklumat VPS tak sah.$N"; pause; return; }
-    host=${hp% *}; port=${hp#* }
-    echo " VPS: $W$host:$port$N   (tukar di menu 6)"
+    RHOST=${hp% *}; RPORT=${hp#* }
+    echo " VPS: $W$RHOST:$RPORT$N   (tukar di menu 6)"
+    has_key && echo " Kunci SSH: ${G}ada$N (tak perlu password)" || echo " Kunci SSH: ${Y}belum$N. Menu 6 > 5 supaya tak perlu password."
     echo ""
     echo " Protokol yang app guna:"
     echo "  1) VLESS   2) VMess   3) Trojan   4) SSH   5) Semua"
     read -rp " Pilih [1]: " m; [ -z "$m" ] && m=1
     [[ "$m" =~ ^[1-5]$ ]] || { echo " ${R}Pilihan tak sah.$N"; pause; return; }
     pr=${PROTOS[$((m-1))]}
-    read -rp " Berapa saat [60]: " secs; [ -z "$secs" ] && secs=60
-    [[ "$secs" =~ ^[0-9]+$ ]] && [ "$secs" -ge 10 ] && [ "$secs" -le 600 ] || { echo " ${R}10 hingga 600 saat.$N"; pause; return; }
+    read -rp " Berapa saat [120]: " secs; [ -z "$secs" ] && secs=120
+    [[ "$secs" =~ ^[0-9]+$ ]] && [ "$secs" -ge 30 ] && [ "$secs" -le 600 ] || { echo " ${R}30 hingga 600 saat.$N"; pause; return; }
     akun=""
     if [ "$pr" != ssh ] && [ "$pr" != semua ]; then
         read -rp " Nama akaun kau (Enter = semua akaun): " akun
         akun=${akun// /}
         [[ -z "$akun" || "$akun" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo " ${R}Nama akaun tak sah.$N"; pause; return; }
     fi
+    command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
     echo ""
-    echo " ${Y}Lepas ni dia sambung SSH (masukkan password VPS kalau diminta).$N"
-    echo " ${Y}Bila mula kira, BUKA app tu kat phone (VPN VLESS hidup) dan biar dia load.$N"
+    echo " ${W}Langkah 1: mulakan imbas kat VPS.$N"
+    has_key || echo " ${Y}Password VPS diminta. TAIP terus, jangan keluar dari Termux.$N"
+    out=$(rsh "[ -x /usr/local/bin/imbas ] || { echo TIADA_IMBAS; exit 1; }; nohup env YA=1 /usr/local/bin/imbas $secs $pr $akun > /root/.imbas-out.txt 2>&1 < /dev/null & echo MULA_OK")
+    rc=$?
+    if echo "$out" | grep -q TIADA_IMBAS; then
+        echo " ${R}imbas belum dipasang kat VPS tu. Pasang dulu (BARIS F dalam ARAHAN-PASANG.txt).$N"
+        command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null; pause; return
+    fi
+    if ! echo "$out" | grep -q MULA_OK; then
+        echo " ${R}Tak dapat mulakan imbas (kod $rc). Semak IP, port dan password. Matikan VPN kalau hidup.$N"
+        command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null; pause; return
+    fi
+    echo ""
+    echo " ${G}Imbas dah jalan kat VPS selama $secs saat.$N"
+    echo "   1. Hidupkan VPN VLESS kat phone"
+    echo "   2. Buka app tu, biar video atau laman load"
+    echo "   3. Lepas $secs saat, MATIKAN VPN dan balik ke Termux"
     echo ""
     tmp=$(mk)
-    ssh -tt -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=15 -o ConnectTimeout=15 -p "$port" "root@$host" "YA=1 /usr/local/bin/imbas $secs $pr $akun" 2>&1 | tee "$tmp/out"
-    rc=${PIPESTATUS[0]}
-    echo ""
-    if grep -q 'No such file\|not found' "$tmp/out" 2>/dev/null && [ "$rc" -eq 127 ]; then
-        echo " ${R}imbas belum dipasang kat VPS tu. Pasang dulu (BARIS F dalam ARAHAN-PASANG.txt).$N"; pause; return
-    fi
-    if [ "$rc" -eq 255 ]; then echo " ${R}Tak dapat sambung SSH. Semak IP, port dan password.$N"; pause; return; fi
+    while true; do
+        if ! read -rp " Bila dah balik dan VPN dimatikan, tekan Enter (x = batal): " x || [ "$x" = x ] || [ "$x" = X ]; then
+            command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null
+            return
+        fi
+        out=$(rsh 'f=/root/.imbas-out.txt; [ -f $f ] || { echo TIADA_FAIL; exit 0; }; cat $f; grep -q "Log imbasan dah dimatikan" $f && rm -f $f')
+        rc=$?
+        if [ "$rc" -eq 255 ] || [ -z "$out" ]; then echo " ${R}Tak dapat sambung SSH. Matikan VPN, kemudian cuba lagi.$N"; continue; fi
+        if echo "$out" | grep -q TIADA_FAIL; then echo " ${R}Fail imbas tak jumpa kat VPS. Cuba mula semula.$N"; pause; return; fi
+        if echo "$out" | grep -q "Log imbasan dah dimatikan"; then break; fi
+        echo " ${Y}Imbas belum siap. Tunggu sebentar.$N"
+    done
+    command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null
+    echo "$out" > "$tmp/out"
+    echo "$C$LINE$N"
+    tr -d '\r' < "$tmp/out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | sed -n '/===== HASIL =====/,/Log imbasan dah dimatikan/p' | grep -v 'Log imbasan'
+    echo "$C$LINE$N"
     parse_imbas "$tmp/out" > "$tmp/cand"
     cnt=$(wc -l < "$tmp/cand")
     if [ "$cnt" -eq 0 ]; then
-        echo " ${Y}Tiada calon domain baru. Baca ringkasan atas untuk sebab (contoh: VPN tak sambung ke VPS ni).$N"
+        echo " ${Y}Tiada calon domain baru. Baca ringkasan atas untuk sebab.$N"
         pause; return
     fi
-    echo "$C$LINE$N"
     echo " ${W}Calon domain ($cnt):$N"
-    k=0; cand=()
+    k=0
     while read -r d n lab; do
         k=$((k+1)); cand+=("$d")
         printf ' %s%2d%s) %-26s %s%sx %s%s\n' "$W" "$k" "$N" "$d" "$Y" "$n" "$lab" "$N"
@@ -385,6 +414,23 @@ t_imbas() {
     read -rp " Hantar ke GitHub sekarang? (y/n): " m
     if [ "$m" = y ] || [ "$m" = Y ]; then t_hantar; return; fi
     pause
+}
+setup_key() {
+    local hp key out
+    command -v ssh-keygen >/dev/null 2>&1 || { echo " ${R}Taip: pkg install openssh$N"; return 1; }
+    hp=$(get_vps) || { echo " ${R}Maklumat VPS tak sah.$N"; return 1; }
+    RHOST=${hp% *}; RPORT=${hp#* }
+    mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh"
+    [ -f "$HOME/.ssh/id_ed25519" ] || ssh-keygen -q -t ed25519 -N "" -f "$HOME/.ssh/id_ed25519"
+    key=$(cat "$HOME/.ssh/id_ed25519.pub")
+    echo " Taip password VPS (sekali sahaja):"
+    out=$(rsh "mkdir -p ~/.ssh && chmod 700 ~/.ssh && { grep -qxF '$key' ~/.ssh/authorized_keys 2>/dev/null || echo '$key' >> ~/.ssh/authorized_keys; } && chmod 600 ~/.ssh/authorized_keys && echo KUNCI_OK")
+    echo "$out" | grep -q KUNCI_OK || { echo " ${R}Gagal pasang kunci. Semak password dan port.$N"; return 1; }
+    if ssh "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" 'echo OK' 2>/dev/null | grep -q OK; then
+        echo " ${G}Kunci berfungsi. Lepas ni tak perlu password.$N"
+    else
+        echo " ${Y}Kunci dipasang tapi VPS tak terima. Imbas masih boleh guna password.$N"
+    fi
 }
 
 # ---------- 4) SENARAI DOMAIN GEO ----------
@@ -479,6 +525,7 @@ t_tetap() {
         echo " 2) Semak token"
         echo " 3) Padam token"
         echo " 4) Tukar VPS imbas"
+        echo " 5) Sediakan kunci SSH (tak perlu password)"
         echo " 0) Kembali"
         read -rp " Pilih: " m || return
         case "$m" in
@@ -503,6 +550,7 @@ t_tetap() {
                pause ;;
             3) rm -f "$TOK"; echo " Token dipadam."; sleep 1 ;;
             4) rm -f "$VPSF"; get_vps >/dev/null && echo " Disimpan."; sleep 1 ;;
+            5) setup_key; pause ;;
             0|"") return ;;
         esac
     done
