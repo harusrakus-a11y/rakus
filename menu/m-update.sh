@@ -108,6 +108,7 @@ wget -q -O /usr/bin/update "https://raw.githubusercontent.com/harusrakus-a11y/ra
 wget -q -O /usr/bin/m-tcp "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-tcp.sh" && chmod +x /usr/bin/m-tcp
 
 wget -q -O /usr/bin/m-theme "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-theme.sh" && chmod +x /usr/bin/m-theme
+wget -q -O /tmp/m-tools.new "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-tools.sh" && [ "$(head -c2 /tmp/m-tools.new)" = "#!" ] && mv /tmp/m-tools.new /usr/bin/m-tools && chmod +x /usr/bin/m-tools
 wget -q -O /usr/bin/m-vmess "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-vmess.sh" && chmod +x /usr/bin/m-vmess
 wget -q -O /usr/bin/m-vless "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-vless.sh" && chmod +x /usr/bin/m-vless
 wget -q -O /usr/bin/m-trojan "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-trojan.sh" && chmod +x /usr/bin/m-trojan

@@ -257,7 +257,7 @@ kn_item2 "03" "VLESS"    "08" "REBOOT"
 kn_item2 "04" "TROJAN"   "09" "UPDATE"
 kn_item2 "05" "BACKUP"   "10" "SETTING"
 kn_item2 "11" "BOT TG"   "12" "ONLINE"
-kn_item1 "00" "KELUAR"
+kn_item2 "13" "TOOLS"    "00" "KELUAR"
 kn_mid
 kn_row "Trafik" "hari ini $T_DAY"
 kn_cont "bulan ini $T_MON"
@@ -268,6 +268,26 @@ kn_mid
 kn_title_r "$KN_BRAND"
 kn_bot
 echo ""
+# TOOLS: pasang sendiri kalau belum ada (selamat, tak timpa dengan fail kosong)
+kn_tools() {
+    if [ ! -x /usr/bin/m-tools ]; then
+        echo -e " ${COLOR1}Memasang TOOLS...${NC}"
+        rm -f /tmp/m-tools.new
+        if wget -q -T 15 -t 2 -O /tmp/m-tools.new "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/m-tools.sh" 2>/dev/null \
+           && [ "$(head -c2 /tmp/m-tools.new 2>/dev/null)" = "#!" ]; then
+            mv /tmp/m-tools.new /usr/bin/m-tools && chmod +x /usr/bin/m-tools
+        fi
+        rm -f /tmp/m-tools.new
+    fi
+    if [ -x /usr/bin/m-tools ]; then
+        m-tools
+    else
+        echo -e " Tak dapat muat turun TOOLS. Pastikan m-tools.sh dah diupload ke GitHub (folder menu)."
+        sleep 3
+        menu
+    fi
+}
+
 echo -ne " ${WH}Pilih menu ${COLOR1}: ${WH}"; read -r opt
 echo -ne "${NC}"
 case $opt in
@@ -283,6 +303,7 @@ case $opt in
 10 | 10) clear ; system ;;
 11 | 11) bot_menu ; menu ;;
 12 | 12) clear ; online ;;
+13 | 13) clear ; kn_tools ;;
 15 | 15) clear ; admin ;;
 00 | 0 | x | X) clear ; exit 0 ;;
 *) clear ; menu ;;
