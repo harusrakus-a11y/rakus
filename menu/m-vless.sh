@@ -115,7 +115,13 @@ if [ ! -e /etc/vless/akun ]; then
 mkdir -p /etc/vless/akun
 fi
 telco_conf=/etc/xray/telco.conf
+telco_url=https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/telco.conf
 telco_init() {
+rm -f /tmp/telco.new
+if wget -q -T 8 -t 1 -O /tmp/telco.new "$telco_url" 2>/dev/null && grep -Eq '^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$' /tmp/telco.new; then
+cp /tmp/telco.new $telco_conf
+fi
+rm -f /tmp/telco.new
 [ -s $telco_conf ] && return
 cat > $telco_conf <<'EOT'
 # nama|alamat|host|path|port   ({domain} = domain VPS)
