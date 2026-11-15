@@ -67,9 +67,28 @@ touch /var/log/xray/access.log
 touch /var/log/xray/error.log
 touch /var/log/xray/access2.log
 touch /var/log/xray/error2.log
-# / / Ambil Xray Core Version Terbaru
+# / / Ambil Xray Core Terbaru (muat turun terus, tanpa API GitHub)
+XV="$(curl -sIL -o /dev/null -w '%{url_effective}' https://github.com/XTLS/Xray-core/releases/latest | sed 's#.*/##')"
+case "$(uname -m)" in
+aarch64|arm64) XA="arm64-v8a" ;;
+*) XA="64" ;;
+esac
+rm -rf /root/xr-tmp
+mkdir -p /root/xr-tmp
+if [[ "$XV" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && curl -fsSL -o /root/xr-tmp/x.zip "https://github.com/XTLS/Xray-core/releases/download/$XV/Xray-linux-$XA.zip"; then
+unzip -o -q /root/xr-tmp/x.zip -d /root/xr-tmp/x 2>/dev/null || python3 -m zipfile -e /root/xr-tmp/x.zip /root/xr-tmp/x
+install -m 755 /root/xr-tmp/x/xray /usr/local/bin/xray
+mkdir -p /usr/local/share/xray
+cp /root/xr-tmp/x/geoip.dat /root/xr-tmp/x/geosite.dat /usr/local/share/xray/
+fi
+rm -rf /root/xr-tmp
+# kalau cara terus gagal, guna pemasang rasmi
+if [ ! -x /usr/local/bin/xray ]; then
 latest_version="$(curl -s https://api.github.com/repos/XTLS/Xray-core/releases | grep tag_name | sed -E 's/.*"v(.*)".*/\1/' | head -n 1)"
 bash -c "$(curl -L https://github.com/XTLS/Xray-install/raw/main/install-release.sh)" @ install -u www-data --version $latest_version
+fi
+# xray jalan sebagai www-data, fail log mesti milik dia
+chown -R www-data:www-data /var/log/xray
 
 ## crt xray
 systemctl stop nginx

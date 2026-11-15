@@ -246,6 +246,7 @@ cat key.pem cert.pem >> /etc/stunnel/stunnel.pem
 
 # konfigurasi stunnel
 sed -i 's/ENABLED=0/ENABLED=1/g' /etc/default/stunnel4
+systemctl enable stunnel4 >/dev/null 2>&1
 /etc/init.d/stunnel4 restart
 
 #OpenVPN
