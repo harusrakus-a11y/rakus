@@ -420,11 +420,296 @@ sel_add() {   # fail: domain kali dari  -> pilih, tambah, tawar hantar
 }
 # ---- LIVE: baca log Xray akaun kau terus, domain keluar masa kau buka website/app ----
 LIVE_NOISE='cloudflare-dns|dns\.google|quad9|sentry\.io|gstatic|googleapis|apple\.com|icloud|microsoft|windows|msftncsi|ocsp|digicert|doubleclick|crashlytics|firebase|ntp\.|in-addr|ip6\.arpa|^localhost$|googletagmanager|google-analytics|connectivitycheck'
-read -r -d '' LIVE_REMOTE <<'LEOF'
-XL=$(grep -ho '"access"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/xray/*.json /usr/local/etc/xray/*.json 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
-[ -n "$XL" ] || XL=/var/log/xray/access.log
-tail -n 0 -F "$XL" 2>/dev/null | grep --line-buffered -i 'email: @@AKUN@@'
-LEOF
+IFS= read -r -d '' LIVE_PY <<'PYEOF'
+import os, sys, re, time, glob, socket, struct, signal, threading, ipaddress, ctypes
+
+AKUN = sys.argv[2] if len(sys.argv) > 2 else ""
+signal.alarm(3600)
+
+DN = {}      # ip -> nama (dari jawapan DNS yang VPS nampak)
+SN = {}      # ip -> nama (dari SNI TLS)
+ST = [0, 0, 0]   # sambungan akaun, ada nama, IP tanpa nama
+
+
+def say(s):
+    sys.stdout.write(s + "\n")
+    sys.stdout.flush()
+
+
+def findlog():
+    p = os.environ.get("KL_LOG")
+    if p:
+        return p
+    for pat in ("/etc/xray/*.json", "/usr/local/etc/xray/*.json"):
+        for fn in sorted(glob.glob(pat)):
+            try:
+                t = open(fn, errors="replace").read()
+            except Exception:
+                continue
+            m = re.search(r'"access"\s*:\s*"([^"]+)"', t)
+            if m and m.group(1) not in ("none", ""):
+                return m.group(1)
+    return "/var/log/xray/access.log"
+
+
+def rname(d, o):
+    labs = []
+    end = None
+    n = 0
+    while True:
+        if o >= len(d) or n > 60:
+            return None, None
+        n += 1
+        l = d[o]
+        if l == 0:
+            o += 1
+            break
+        if l & 0xC0 == 0xC0:
+            if o + 1 >= len(d):
+                return None, None
+            if end is None:
+                end = o + 2
+            o = ((l & 0x3F) << 8) | d[o + 1]
+            continue
+        o += 1
+        labs.append(d[o:o + l].decode("ascii", "ignore"))
+        o += l
+    return ".".join(labs).lower(), (end if end is not None else o)
+
+
+def dns_resp(p):
+    if len(p) < 12 or not struct.unpack("!H", p[2:4])[0] & 0x8000:
+        return
+    qd, an = struct.unpack("!HH", p[4:8])
+    o = 12
+    q = None
+    for _ in range(qd):
+        nm, o = rname(p, o)
+        if nm is None:
+            return
+        o += 4
+        if q is None:
+            q = nm
+    if not q:
+        return
+    if len(DN) > 60000:
+        DN.clear()
+    for _ in range(an):
+        nm, o = rname(p, o)
+        if nm is None or o + 10 > len(p):
+            return
+        t, _c, _ttl, rl = struct.unpack("!HHIH", p[o:o + 10])
+        o += 10
+        rd = p[o:o + rl]
+        o += rl
+        if t == 1 and rl == 4:
+            DN[socket.inet_ntoa(rd)] = q
+        elif t == 28 and rl == 16:
+            DN[ipaddress.IPv6Address(rd).compressed] = q
+
+
+def sni(p):
+    try:
+        if len(p) < 44 or p[0] != 0x16 or p[1] != 3 or p[5] != 1:
+            return None
+        o = 43
+        o += 1 + p[o]
+        o += 2 + struct.unpack("!H", p[o:o + 2])[0]
+        o += 1 + p[o]
+        o += 2
+        while o + 4 <= len(p):
+            t, l = struct.unpack("!HH", p[o:o + 4])
+            o += 4
+            if t == 0:
+                nl = struct.unpack("!H", p[o + 3:o + 5])[0]
+                return p[o + 5:o + 5 + nl].decode("ascii", "ignore").lower() or None
+            o += l
+    except Exception:
+        return None
+    return None
+
+
+def bpf_prog():
+    # SOCK_DGRAM: data bermula di header IP. Lulus: UDP sumber port 53, atau TCP ke port 443 yang payload bermula 0x16.
+    P = [
+        ("ldb", 9, None, None, None),
+        ("jeq", 17, None, "CT", None),
+        ("ldh", 6, None, None, None),
+        ("jset", 0x1fff, "REJ", None, None),
+        ("ldxb", 0, None, None, None),
+        ("ldhx", 0, None, None, None),
+        ("jeq", 53, "ACC", "REJ", None),
+        ("jeq", 6, None, "REJ", "CT"),
+        ("ldh", 6, None, None, None),
+        ("jset", 0x1fff, "REJ", None, None),
+        ("ldxb", 0, None, None, None),
+        ("ldhx", 2, None, None, None),
+        ("jeq", 443, None, "REJ", None),
+        ("ldbx", 12, None, None, None),
+        ("rsh", 4, None, None, None),
+        ("lsh", 2, None, None, None),
+        ("addx", 0, None, None, None),
+        ("tax", 0, None, None, None),
+        ("ldbx", 0, None, None, None),
+        ("jeq", 0x16, "ACC", "REJ", None),
+        ("ret", 262144, None, None, "ACC"),
+        ("ret", 0, None, None, "REJ"),
+    ]
+    codes = {"ldb": 0x30, "ldh": 0x28, "ldxb": 0xb1, "ldhx": 0x48, "ldbx": 0x50, "jeq": 0x15, "jset": 0x45,
+             "ret": 0x06, "rsh": 0x74, "lsh": 0x64, "addx": 0x0c, "tax": 0x07}
+    lab = {}
+    for i, e in enumerate(P):
+        if e[4]:
+            lab[e[4]] = i
+    out = b""
+    for i, (op, k, jt, jf, _l) in enumerate(P):
+        a = (lab[jt] - i - 1) if jt else 0
+        b = (lab[jf] - i - 1) if jf else 0
+        out += struct.pack("HBBI", codes[op], a, b, k)
+    return out
+
+
+def open_sniffer():
+    s = socket.socket(socket.AF_PACKET, socket.SOCK_DGRAM, socket.htons(0x0800))
+    try:
+        prog = bpf_prog()
+        buf = ctypes.create_string_buffer(prog, len(prog))
+        fp = struct.pack("HL", len(prog) // 8, ctypes.addressof(buf))
+        s.setsockopt(socket.SOL_SOCKET, 26, fp)
+    except Exception:
+        pass
+    return s
+
+
+def sniff_loop(s):
+    while True:
+        try:
+            d = s.recv(65535)
+            if len(d) < 28 or d[0] >> 4 != 4:
+                continue
+            ihl = (d[0] & 15) * 4
+            pr = d[9]
+            if pr == 17:
+                if struct.unpack("!H", d[ihl:ihl + 2])[0] == 53:
+                    dns_resp(d[ihl + 8:])
+            elif pr == 6:
+                if struct.unpack("!H", d[ihl + 2:ihl + 4])[0] == 443:
+                    th = (d[ihl + 12] >> 4) * 4
+                    n = sni(d[ihl + th:])
+                    if n:
+                        if len(SN) > 60000:
+                            SN.clear()
+                        SN[socket.inet_ntoa(d[16:20])] = n
+        except Exception:
+            time.sleep(0.01)
+
+
+RX = re.compile(r"accepted\s+(tcp|udp):(\[[^\]]+\]|[^:\s]+):(\d+)")
+EM = re.compile(r"email:\s*(\S+)")
+PEND = []
+
+
+def norm(h):
+    h = h.strip("[]")
+    try:
+        return ipaddress.ip_address(h).compressed, True
+    except ValueError:
+        return h.lower(), False
+
+
+def emit(pr, name, port):
+    ST[1] += 1
+    say("accepted %s:%s:%s email: %s" % (pr, name, port, AKUN or "x"))
+
+
+def handle(ln):
+    m = RX.search(ln)
+    e = EM.search(ln)
+    if not m or not e:
+        return
+    if AKUN and e.group(1).lower() != AKUN.lower():
+        return
+    pr, h, port = m.group(1), m.group(2), m.group(3)
+    if port == "53":
+        return
+    host, isip = norm(h)
+    ST[0] += 1
+    if not isip:
+        emit(pr, host, port)
+        return
+    n = SN.get(host) or DN.get(host)
+    if n:
+        emit(pr, n, port)
+    else:
+        PEND.append((time.time() + 2.0, host, pr, port))
+
+
+def pend_run():
+    now = time.time()
+    keep = []
+    for it in PEND:
+        n = SN.get(it[1]) or DN.get(it[1])
+        if n:
+            emit(it[2], n, it[3])
+        elif now > it[0]:
+            ST[2] += 1
+        else:
+            keep.append(it)
+    PEND[:] = keep
+
+
+def main():
+    xl = findlog()
+    try:
+        f = open(xl, "r", errors="replace")
+    except Exception:
+        say("TIADA_LOG " + xl)
+        return
+    f.seek(0, 2)
+    ino = os.fstat(f.fileno()).st_ino
+    note = "READY"
+    try:
+        s = open_sniffer()
+        threading.Thread(target=sniff_loop, args=(s,), daemon=True).start()
+    except Exception as ex:
+        note = "READY NOSNIFF " + str(ex).replace("\n", " ")
+    say(note)
+    buf = ""
+    prev = None
+    last = time.time()
+    while True:
+        ln = f.readline()
+        if ln:
+            buf += ln
+            if buf.endswith("\n"):
+                handle(buf)
+                buf = ""
+            continue
+        pend_run()
+        if time.time() - last >= 1:
+            last = time.time()
+            cur = tuple(ST)
+            if cur != prev:
+                prev = cur
+                say("STAT %d %d %d" % cur)
+            try:
+                st = os.stat(xl)
+                if st.st_ino != ino or st.st_size < f.tell():
+                    f.close()
+                    f = open(xl, "r", errors="replace")
+                    ino = os.fstat(f.fileno()).st_ino
+            except Exception:
+                pass
+        time.sleep(0.05)
+
+
+main()
+PYEOF
+live_cmd() {   # $1 = nama akaun. Skrip python jalan kat VPS (baca log Xray + nama domain dari DNS/SNI)
+    local b
+    b=$(printf '%s\n' "$LIVE_PY" | base64 | tr -d '\n')
+    printf '%s' "command -v python3 >/dev/null 2>&1 || { echo TIADA_PYTHON; exit 1; }; exec python3 -u -c 'import base64,sys;exec(base64.b64decode(sys.argv[1]))' $b '$1'"
+}
 read -r -d '' LIVE_DIAG <<'LEOF'
 XL=$(grep -ho '"access"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/xray/*.json /usr/local/etc/xray/*.json 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
 [ -n "$XL" ] || XL=/var/log/xray/access.log
@@ -453,7 +738,7 @@ live_line() {   # $1 = baris log; guna LC LF LORD LIVE_SKIP LIVE_IPS (diisytihar
     printf '\n'
 }
 t_live() {
-    local akun tmp spid n done_n=0 line key d diag
+    local akun tmp spid n done_n=0 line key d diag ready=0 nosniff=0 tick=0 stt=0 stn=0 sti=0
     declare -A LC=() LF=()
     local -a LORD=()
     local LIVE_IPS=0
@@ -472,34 +757,59 @@ t_live() {
     [[ -z "$akun" || "$akun" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo " ${R}Nama akaun tak sah.$N"; pause; return; }
     tmp=$(mk)
     : > "$tmp/stream"
-    ssh -tt "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" "${LIVE_REMOTE//@@AKUN@@/$akun}" < /dev/null > "$tmp/stream" 2>"$tmp/sserr" &
+    ssh -tt "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" "$(live_cmd "$akun")" < /dev/null > "$tmp/stream" 2>"$tmp/sserr" &
     spid=$!
     command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
     echo ""
-    echo " ${G}LIVE jalan.$N Hidupkan VPN, lepas tu buka website atau app."
-    echo " Domain baru keluar kat bawah. ${Y}Tekan mana-mana kekunci untuk berhenti.$N"
-    echo "$C$LINE$N"
+    echo " Menyambung ke VPS, tunggu sekejap..."
     while kill -0 "$spid" 2>/dev/null; do
         n=$(wc -l < "$tmp/stream")
         if [ "$n" -gt "$done_n" ]; then
-            while IFS= read -r line; do live_line "${line%$'\r'}"; done < <(sed -n "$((done_n+1)),${n}p" "$tmp/stream")
+            while IFS= read -r line; do
+                line=${line%$'\r'}
+                case "$line" in
+                    READY*)
+                        ready=1; [[ "$line" == *NOSNIFF* ]] && nosniff=1
+                        echo " ${G}LIVE jalan.$N Hidupkan VPN, lepas tu buka website atau app."
+                        echo " Domain baru keluar kat bawah. ${Y}Tekan mana-mana kekunci untuk berhenti.$N"
+                        [ "$nosniff" = 1 ] && echo " ${Y}VPS tak bagi baca nama domain. Hanya app yang hantar nama terus akan keluar.$N"
+                        echo "$C$LINE$N" ;;
+                    STAT\ *) set -- $line; stt=${2:-0}; stn=${3:-0}; sti=${4:-0} ;;
+                    TIADA_*) ;;
+                    *) live_line "$line" ;;
+                esac
+            done < <(sed -n "$((done_n+1)),${n}p" "$tmp/stream")
             done_n=$n
         fi
+        tick=$((tick+1))
+        [ "$ready" = 0 ] && [ "$tick" = 12 ] && echo " ${Y}Masih menyambung... (tekan kekunci untuk batal)$N"
         read -t 1 -n 1 -s key && break
     done
-    if ! kill -0 "$spid" 2>/dev/null; then echo " ${R}Sambungan SSH terputus.$N $(tr -d '\r' < "$tmp/sserr" | head -n 2)"; fi
+    if grep -q TIADA_PYTHON "$tmp/stream" 2>/dev/null; then
+        echo " ${R}VPS tak ada python3. Mod LIVE perlukan python3 kat VPS.$N"
+    elif grep -q TIADA_LOG "$tmp/stream" 2>/dev/null; then
+        echo " ${R}Log Xray tak jumpa kat VPS: $(grep TIADA_LOG "$tmp/stream" | head -n 1 | tr -d '\r' | cut -d' ' -f2-)$N"
+    elif ! kill -0 "$spid" 2>/dev/null; then
+        echo " ${R}Sambungan SSH terputus.$N $(tr -d '\r' < "$tmp/sserr" | head -n 2)"
+    fi
     kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
     command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null
     echo "$C$LINE$N"
     if [ ${#LORD[@]} -eq 0 ]; then
         echo " ${Y}Tiada domain baru dari akaun ${akun:-semua}.$N"
+        if [ "$ready" = 1 ]; then
+            echo " Sambungan akaun masa LIVE: $stt   ada nama: $stn   IP tanpa nama: $sti"
+            if [ "$stt" -gt 0 ] && [ "$stn" -eq 0 ]; then
+                echo " ${Y}Ada sambungan tapi nama tak dapat dikesan.$N"
+                echo " Tutup tab, sambung VPN, buka semula supaya DNS baru dihantar."
+            elif [ "$stt" -eq 0 ]; then
+                echo " ${Y}Tiada sambungan dari akaun ni masa LIVE (VPN belum sambung atau tiada trafik).$N"
+            fi
+        fi
         diag=$(ssh "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" "$LIVE_DIAG" 2>/dev/null | tr -d '\r')
-        if [ -n "$diag" ]; then
-            echo " Log VPS ada sambungan untuk akaun ni (sambungan setiap akaun):"
+        if [ -n "$diag" ] && [ "$stt" -eq 0 ]; then
+            echo " Akaun yang ada dalam log VPS (sambungan setiap akaun):"
             echo "$diag" | sed 's/^/   /'
-            echo " ${Y}Kalau akaun kau tak ada dalam senarai, VPN kau tak sambung ke VPS ni.$N"
-        else
-            echo " ${Y}Log Xray kosong atau tak dijumpai kat VPS.$N"
         fi
         pause; return
     fi
