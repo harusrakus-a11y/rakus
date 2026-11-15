@@ -185,6 +185,40 @@ cd
 if [ ! -e /etc/trojan/akun ]; then
 mkdir -p /etc/trojan/akun
 fi
+telco_conf=/etc/xray/telco.conf
+telco_url=https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/telco.conf
+telco_init() {
+rm -f /tmp/telco.new
+if wget -q -T 8 -t 1 -O /tmp/telco.new "$telco_url" 2>/dev/null && grep -Eq '^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$' /tmp/telco.new; then
+cp /tmp/telco.new $telco_conf
+fi
+rm -f /tmp/telco.new
+[ -s $telco_conf ] && return
+cat > $telco_conf <<'EOT'
+# nama|alamat|host|path|port   ({domain} = domain VPS)
+celcom|mcmc-my.metricelltestcloud.com.{domain}|mcmc-my.metricelltestcloud.com|/vless|80
+digi|104.18.21.212|{domain}|/vless|80
+maxis-viu|help.viu.com.{domain}|help.viu.com|/vless|80
+maxis-cmgo|104.16.160.145|cfcdn.viu.com.{domain}|/vless|80
+yes|104.17.147.22|{domain}|/vless|80
+tonewow|172.66.169.187|{domain}|/vless|80
+EOT
+}
+telco_links() {
+local u=$1 nm=$2 sel=$3 n=0 name addr host pth port
+[ -z "$sel" ] && return
+while IFS='|' read -r name addr host pth port; do
+[[ -z $name || $name == \#* ]] && continue
+n=$((n+1))
+if [[ $sel != 0 && $sel != $n ]]; then continue; fi
+addr=${addr//\{domain\}/$domain}
+host=${host//\{domain\}/$domain}
+pth=${pth:-/vless}
+[[ $pth == /vless ]] && pth=/trojan-ws
+port=${port:-80}
+echo "${name}|trojan://${u}@${addr}:${port}?path=${pth//\//%2F}&security=none&host=${host}&type=ws#${nm}-${name}"
+done < $telco_conf
+}
 function add-tr(){
 clear
 until [[ $user =~ ^[a-zA-Z0-9_.-]+$ && ${user_EXISTS} == '0' ]]; do
@@ -232,6 +266,20 @@ read -p "Limit User (IP) or 0 Unlimited: " iplim
 done
 until [[ $Quota =~ ^[0-9]+$ ]]; do
 read -p "Limit User (GB) or 0 Unlimited: " Quota
+done
+telco_init
+echo ""
+echo "Pilih telco untuk link tambahan:"
+ti=0
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+echo " $ti) $tn"
+done < $telco_conf
+echo " 0) semua telco"
+tsel="x"
+until [[ -z $tsel || ( $tsel =~ ^[0-9]+$ && $tsel -le $ti ) ]]; do
+read -rp "Telco (kosong = tiada): " tsel
 done
 if [ ! -e /etc/trojan ]; then
 mkdir -p /etc/trojan
@@ -295,6 +343,13 @@ _______________________________
 Link GRPC : trojan://${uuid}@${domain}:443?mode=gun&security=tls&type=grpc&serviceName=trojan-grpc&sni=${domain}#${user}
 _______________________________
 END
+telcolines="$(telco_links "$uuid" "$user" "$tsel")"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+echo "Link ${tn} : ${tl}" >> /home/vps/public_html/trojan-$user.txt
+echo "_______________________________" >> /home/vps/public_html/trojan-$user.txt
+done <<< "$telcolines"
+fi
 TEXT="$(kn_text "TROJAN" "$user" "$exp" "$iplim IP" "$Quota")"
 kn_send "$TEXT"
 cd
@@ -342,6 +397,11 @@ kn_link "Key" "${uuid}"
 kn_mid
 kn_link "Link TLS" "${trojanlink}"
 kn_link "Link gRPC" "${trojanlink1}"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+kn_link "Link ${tn}" "${tl}"
+done <<< "$telcolines"
+fi
 kn_link "Format OpenClash" "http://$domain:89/trojan-$user.txt"
 kn_foot
 echo ""
@@ -861,6 +921,43 @@ fi
 done
 user=$(grep -E "^#tr " "/etc/xray/config.json" | cut -d ' ' -f 2 | sed -n "${CLIENT_NUMBER}"p)
 clear
+# kn telco filter
+uuid=$(grep -A1 "^#tr $user " /etc/xray/config.json | grep -o '"password": *"[^"]*"' | head -1 | cut -d '"' -f 4)
+[ -s "$telco_conf" ] || telco_init
+if [ -s "$telco_conf" ] && [ -n "$uuid" ]; then
+ti=0
+kn_top
+kn_title "TAPIS IKUT TELCO"
+kn_mid
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+kn_item1 "$ti" "$tn"
+done < $telco_conf
+kn_item1 "0" "Semua (config penuh)"
+kn_bot
+tf=""
+read -rp " Pilih telco (Enter = config penuh): " tf
+if [[ $tf =~ ^[1-9][0-9]*$ && $tf -le $ti ]]; then
+clear
+tl="$(telco_links "$uuid" "$user" "$tf")"
+if [ -n "$tl" ]; then
+IFS='|' read -r tname turl <<< "$tl"
+kn_top
+kn_title "LINK TELCO"
+kn_mid
+kn_row "User" "$user"
+kn_row "Telco" "$tname"
+kn_link "Link $tname" "$turl"
+kn_foot
+echo ""
+read -n 1 -s -r -p "Press any key to back on menu"
+m-trojan
+return
+fi
+fi
+clear
+fi
 cat /etc/trojan/akun/log-create-${user}.log
 cat /etc/trojan/akun/log-create-${user}.log > /etc/notifakun
 sed -i 's/\x1B\[1;37m//g' /etc/notifakun

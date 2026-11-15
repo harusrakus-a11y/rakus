@@ -186,6 +186,41 @@ cd
 if [ ! -e /etc/vmess/akun ]; then
 mkdir -p /etc/vmess/akun
 fi
+telco_conf=/etc/xray/telco.conf
+telco_url=https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/telco.conf
+telco_init() {
+rm -f /tmp/telco.new
+if wget -q -T 8 -t 1 -O /tmp/telco.new "$telco_url" 2>/dev/null && grep -Eq '^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$' /tmp/telco.new; then
+cp /tmp/telco.new $telco_conf
+fi
+rm -f /tmp/telco.new
+[ -s $telco_conf ] && return
+cat > $telco_conf <<'EOT'
+# nama|alamat|host|path|port   ({domain} = domain VPS)
+celcom|mcmc-my.metricelltestcloud.com.{domain}|mcmc-my.metricelltestcloud.com|/vless|80
+digi|104.18.21.212|{domain}|/vless|80
+maxis-viu|help.viu.com.{domain}|help.viu.com|/vless|80
+maxis-cmgo|104.16.160.145|cfcdn.viu.com.{domain}|/vless|80
+yes|104.17.147.22|{domain}|/vless|80
+tonewow|172.66.169.187|{domain}|/vless|80
+EOT
+}
+telco_links() {
+local u=$1 nm=$2 sel=$3 n=0 name addr host pth port js
+[ -z "$sel" ] && return
+while IFS='|' read -r name addr host pth port; do
+[[ -z $name || $name == \#* ]] && continue
+n=$((n+1))
+if [[ $sel != 0 && $sel != $n ]]; then continue; fi
+addr=${addr//\{domain\}/$domain}
+host=${host//\{domain\}/$domain}
+pth=${pth:-/vless}
+[[ $pth == /vless ]] && pth=/vmess
+port=${port:-80}
+js="{\"v\":\"2\",\"ps\":\"${nm}-${name}\",\"add\":\"${addr}\",\"port\":\"${port}\",\"id\":\"${u}\",\"aid\":\"0\",\"net\":\"ws\",\"path\":\"${pth}\",\"type\":\"none\",\"host\":\"${host}\",\"tls\":\"none\"}"
+echo "${name}|vmess://$(printf '%s' "$js" | base64 -w 0)"
+done < $telco_conf
+}
 function add-vmess(){
 clear
 until [[ $user =~ ^[a-zA-Z0-9_.-]+$ && ${CLIENT_EXISTS} == '0' ]]; do
@@ -233,6 +268,20 @@ read -p "Limit User (IP) or 0 Unlimited: " iplim
 done
 until [[ $Quota =~ ^[0-9]+$ ]]; do
 read -p "Limit User (GB) or 0 Unlimited: " Quota
+done
+telco_init
+echo ""
+echo "Pilih telco untuk link tambahan:"
+ti=0
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+echo " $ti) $tn"
+done < $telco_conf
+echo " 0) semua telco"
+tsel="x"
+until [[ -z $tsel || ( $tsel =~ ^[0-9]+$ && $tsel -le $ti ) ]]; do
+read -rp "Telco (kosong = tiada): " tsel
 done
 if [ ! -e /etc/vmess ]; then
 mkdir -p /etc/vmess
@@ -451,6 +500,13 @@ _______________________________________________________
 Link Opok : vmess://$(echo $VMESS_OPOK | base64 -w 0)
 _______________________________________________________
 END
+telcolines="$(telco_links "$uuid" "$user" "$tsel")"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+echo "Link ${tn} : ${tl}" >> /home/vps/public_html/vmess-$user.txt
+echo "_______________________________" >> /home/vps/public_html/vmess-$user.txt
+done <<< "$telcolines"
+fi
 TEXT="$(kn_text "VMESS" "$user" "$exp" "$iplim IP" "$Quota")"
 kn_send "$TEXT"
 cd
@@ -489,6 +545,11 @@ kn_mid
 kn_link "Link WS TLS" "${vmesslink1}"
 kn_link "Link WS NTLS" "${vmesslink2}"
 kn_link "Link gRPC" "${vmesslink3}"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+kn_link "Link ${tn}" "${tl}"
+done <<< "$telcolines"
+fi
 kn_link "Format OpenClash" "http://$domain:89/vmess-$user.txt"
 kn_foot
 echo ""
@@ -1185,6 +1246,43 @@ fi
 done
 clear
 user=$(grep -E "^#vmg " "/etc/xray/config.json" | cut -d ' ' -f 2 | sed -n "${CLIENT_NUMBER}"p)
+# kn telco filter
+uuid=$(grep -A1 "^#vm $user " /etc/xray/config.json | grep -o '"id": *"[^"]*"' | head -1 | cut -d '"' -f 4)
+[ -s "$telco_conf" ] || telco_init
+if [ -s "$telco_conf" ] && [ -n "$uuid" ]; then
+ti=0
+kn_top
+kn_title "TAPIS IKUT TELCO"
+kn_mid
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+kn_item1 "$ti" "$tn"
+done < $telco_conf
+kn_item1 "0" "Semua (config penuh)"
+kn_bot
+tf=""
+read -rp " Pilih telco (Enter = config penuh): " tf
+if [[ $tf =~ ^[1-9][0-9]*$ && $tf -le $ti ]]; then
+clear
+tl="$(telco_links "$uuid" "$user" "$tf")"
+if [ -n "$tl" ]; then
+IFS='|' read -r tname turl <<< "$tl"
+kn_top
+kn_title "LINK TELCO"
+kn_mid
+kn_row "User" "$user"
+kn_row "Telco" "$tname"
+kn_link "Link $tname" "$turl"
+kn_foot
+echo ""
+read -n 1 -s -r -p "Press any key to back on menu"
+m-vmess
+return
+fi
+fi
+clear
+fi
 cat /etc/vmess/akun/log-create-${user}.log
 cat /etc/vmess/akun/log-create-${user}.log > /etc/notifakun
 sed -i 's/\x1B\[1;37m//g' /etc/notifakun
