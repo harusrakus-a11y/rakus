@@ -416,7 +416,7 @@ WantedBy=multi-user.target
 EOF
 cat > /etc/systemd/system/runn.service <<EOF
 [Unit]
-Description=hokage
+Description=Developer by kancil ecem
 After=network.target
 
 [Service]

@@ -2,7 +2,8 @@
 
 apt install rclone
 printf "q\n" | rclone config
-wget -O /root/.config/rclone/rclone.conf "https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/SYSTEM/rclone.conf"
+# rclone.conf orang lain TIDAK lagi diambil (backup tak dihantar ke Drive pihak lain).
+# Kalau nak backup ke Google Drive sendiri, jalankan: rclone config  (nama remote: dr)
 git clone  https://github.com/casper9/wondershaper.git
 cd wondershaper
 make install
