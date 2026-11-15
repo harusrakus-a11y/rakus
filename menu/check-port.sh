@@ -18,7 +18,7 @@ echo -e "${tyblue}|━━━━━━━━━━━━━━━━━━━━�
 echo -e "${tyblue}|●⏩ Open VPN                : 2086      ${NC}"
 echo -e "${tyblue}|●⏩ SSH SSL Websocket       : 443       ${NC}"
 echo -e "${tyblue}|●⏩ SSH Websocket           : 80,443    ${NC}"
-echo -e "${tyblue}|●⏩ Stunnel                 : 8443,8880 ${NC}"
+echo -e "${tyblue}|●⏩ Stunnel                 : 8443,8881 ${NC}"
 echo -e "${tyblue}|●⏩ Vmess WS TLS            : 443       ${NC}"
 echo -e "${tyblue}|●⏩ Vless WS TLS            : 443       ${NC}"
 echo -e "${tyblue}|●⏩ Trojan WS TLS           : 443       ${NC}"
