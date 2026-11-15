@@ -326,7 +326,7 @@ parse_imbas() {   # fail -> baris: domain kali dari
 SSHO=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -o ServerAliveInterval=10)
 rsh() { ssh "${SSHO[@]}" -p "$RPORT" "root@$RHOST" "$1"; }
 has_key() { [ -f "$HOME/.ssh/id_ed25519" ] || [ -f "$HOME/.ssh/id_rsa" ]; }
-t_imbas() {
+t_imbas_lama() {
     local hp m pr secs akun tmp out rc k i sel cand=() doms=() skipped=() d n lab cnt x
     title "IMBAS DOMAIN DARI VPS"
     command -v ssh >/dev/null 2>&1 || { echo " ${R}ssh belum ada. Taip: pkg install openssh$N"; pause; return; }
@@ -385,19 +385,22 @@ t_imbas() {
     echo "$out" > "$tmp/out"
     echo "$C$LINE$N"
     tr -d '\r' < "$tmp/out" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | sed -n '/===== HASIL =====/,/Log imbasan dah dimatikan/p' | grep -v 'Log imbasan'
-    echo "$C$LINE$N"
     parse_imbas "$tmp/out" > "$tmp/cand"
-    cnt=$(wc -l < "$tmp/cand")
-    if [ "$cnt" -eq 0 ]; then
+    if [ ! -s "$tmp/cand" ]; then
+        echo "$C$LINE$N"
         echo " ${Y}Tiada calon domain baru. Baca ringkasan atas untuk sebab.$N"
         pause; return
     fi
-    echo " ${W}Calon domain ($cnt):$N"
-    k=0
+    sel_add "$tmp/cand"
+}
+sel_add() {   # fail: domain kali dari  -> pilih, tambah, tawar hantar
+    local f=$1 k=0 cand=() d n lab sel i doms=() skipped=() m
+    echo "$C$LINE$N"
+    echo " ${W}Calon domain:$N"
     while read -r d n lab; do
         k=$((k+1)); cand+=("$d")
         printf ' %s%2d%s) %-26s %s%sx %s%s\n' "$W" "$k" "$N" "$d" "$Y" "$n" "$lab" "$N"
-    done < "$tmp/cand"
+    done < "$f"
     echo "$C$LINE$N"
     echo " Pilih yang betul milik app tu: nombor (1 3 5-7), a = semua, kosong = batal"
     read -rp " > " sel
@@ -414,6 +417,107 @@ t_imbas() {
     read -rp " Hantar ke GitHub sekarang? (y/n): " m
     if [ "$m" = y ] || [ "$m" = Y ]; then t_hantar; return; fi
     pause
+}
+# ---- LIVE: baca log Xray akaun kau terus, domain keluar masa kau buka website/app ----
+LIVE_NOISE='cloudflare-dns|dns\.google|quad9|sentry\.io|gstatic|googleapis|apple\.com|icloud|microsoft|windows|msftncsi|ocsp|digicert|doubleclick|crashlytics|firebase|ntp\.|in-addr|ip6\.arpa|^localhost$|googletagmanager|google-analytics|connectivitycheck'
+read -r -d '' LIVE_REMOTE <<'LEOF'
+XL=$(grep -ho '"access"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/xray/*.json /usr/local/etc/xray/*.json 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
+[ -n "$XL" ] || XL=/var/log/xray/access.log
+tail -n 0 -F "$XL" 2>/dev/null | grep --line-buffered -i 'email: @@AKUN@@'
+LEOF
+read -r -d '' LIVE_DIAG <<'LEOF'
+XL=$(grep -ho '"access"[[:space:]]*:[[:space:]]*"[^"]*"' /etc/xray/*.json /usr/local/etc/xray/*.json 2>/dev/null | head -1 | sed 's/.*:[[:space:]]*"//;s/"$//')
+[ -n "$XL" ] || XL=/var/log/xray/access.log
+grep -o 'email: [^ ]*' "$XL" 2>/dev/null | sort | uniq -c | sort -rn | head -6
+LEOF
+live_line() {   # $1 = baris log; guna LC LF LORD LIVE_SKIP LIVE_IPS (diisytihar dalam t_live)
+    local h p d
+    [[ "$1" =~ accepted[[:space:]]+(tcp|udp):(\[[^]]+\]|[^:[:space:]]+):([0-9]+) ]] || return
+    h=${BASH_REMATCH[2],,}; p=${BASH_REMATCH[3]}
+    [ "$p" = 53 ] && return
+    if [[ "$h" =~ ^[0-9.]+$ || "$h" == \[* || "$h" == *:* ]]; then LIVE_IPS=$((LIVE_IPS+1)); return; fi
+    valid "$h" || return
+    [[ "$h" =~ $LIVE_NOISE ]] && return
+    d=$(induk "$h")
+    in_list "$d" $BIG && return
+    if [ -n "${LC[$d]}" ]; then LC[$d]=$((LC[$d]+1)); return; fi
+    LC[$d]=1
+    if grep -qx "$d" "$LOC" 2>/dev/null; then
+        LC[$d]=-1
+        printf '  %s=%s %s %s(dah dalam senarai)%s\n' "$G" "$N" "$d" "$G" "$N"
+        return
+    fi
+    LORD+=("$d"); LF[$d]=$h
+    printf ' %s%2d%s) %s%s%s' "$W" "${#LORD[@]}" "$N" "$G" "$d" "$N"
+    [ "$h" != "$d" ] && printf ' %s<- %s%s' "$Y" "${h:0:22}" "$N"
+    printf '\n'
+}
+t_live() {
+    local akun tmp spid n done_n=0 line key d diag
+    declare -A LC=() LF=()
+    local -a LORD=()
+    local LIVE_IPS=0
+    title "LIVE: DOMAIN BILA KAU BUKA APP"
+    command -v ssh >/dev/null 2>&1 || { echo " ${R}ssh belum ada. Taip: pkg install openssh$N"; pause; return; }
+    ensure_loc
+    local hp; hp=$(get_vps) || { echo " ${R}Maklumat VPS tak sah.$N"; pause; return; }
+    RHOST=${hp% *}; RPORT=${hp#* }
+    if ! ssh "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" true 2>/dev/null; then
+        echo " ${R}Mod LIVE perlu kunci SSH. Pergi menu 6 > 5 dulu.$N"
+        echo " ${Y}Kalau dah ada kunci dan masih gagal, matikan VPN dan cuba lagi.$N"
+        pause; return
+    fi
+    read -rp " Nama akaun kau (Enter = semua akaun): " akun
+    akun=${akun// /}
+    [[ -z "$akun" || "$akun" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo " ${R}Nama akaun tak sah.$N"; pause; return; }
+    tmp=$(mk)
+    : > "$tmp/stream"
+    ssh -tt "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" "${LIVE_REMOTE//@@AKUN@@/$akun}" < /dev/null > "$tmp/stream" 2>"$tmp/sserr" &
+    spid=$!
+    command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock 2>/dev/null
+    echo ""
+    echo " ${G}LIVE jalan.$N Hidupkan VPN, lepas tu buka website atau app."
+    echo " Domain baru keluar kat bawah. ${Y}Tekan mana-mana kekunci untuk berhenti.$N"
+    echo "$C$LINE$N"
+    while kill -0 "$spid" 2>/dev/null; do
+        n=$(wc -l < "$tmp/stream")
+        if [ "$n" -gt "$done_n" ]; then
+            while IFS= read -r line; do live_line "${line%$'\r'}"; done < <(sed -n "$((done_n+1)),${n}p" "$tmp/stream")
+            done_n=$n
+        fi
+        read -t 1 -n 1 -s key && break
+    done
+    if ! kill -0 "$spid" 2>/dev/null; then echo " ${R}Sambungan SSH terputus.$N $(tr -d '\r' < "$tmp/sserr" | head -n 2)"; fi
+    kill "$spid" 2>/dev/null; wait "$spid" 2>/dev/null
+    command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock 2>/dev/null
+    echo "$C$LINE$N"
+    if [ ${#LORD[@]} -eq 0 ]; then
+        echo " ${Y}Tiada domain baru dari akaun ${akun:-semua}.$N"
+        diag=$(ssh "${SSHO[@]}" -o BatchMode=yes -p "$RPORT" "root@$RHOST" "$LIVE_DIAG" 2>/dev/null | tr -d '\r')
+        if [ -n "$diag" ]; then
+            echo " Log VPS ada sambungan untuk akaun ni (sambungan setiap akaun):"
+            echo "$diag" | sed 's/^/   /'
+            echo " ${Y}Kalau akaun kau tak ada dalam senarai, VPN kau tak sambung ke VPS ni.$N"
+        else
+            echo " ${Y}Log Xray kosong atau tak dijumpai kat VPS.$N"
+        fi
+        pause; return
+    fi
+    : > "$tmp/cand"
+    for d in "${LORD[@]}"; do echo "$d ${LC[$d]} LIVE" >> "$tmp/cand"; done
+    sel_add "$tmp/cand"
+}
+t_imbas() {
+    local m
+    title "IMBAS DOMAIN DARI VPS"
+    echo " 1) LIVE (domain keluar terus masa kau buka app)"
+    echo " 2) Imbas lama (tunggu beberapa saat, tak perlu kunci)"
+    echo " 0) Kembali"
+    read -rp " Pilih [1]: " m; [ -z "$m" ] && m=1
+    case "$m" in
+        1) t_live ;;
+        2) t_imbas_lama ;;
+    esac
 }
 setup_key() {
     local hp key out
