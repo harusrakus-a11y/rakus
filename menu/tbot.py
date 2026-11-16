@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# tbot - bot Telegram untuk urus akaun VLESS, VMess, Trojan dan SSH di VPS autoscript (admin sahaja)
+# tbot - bot Telegram untuk urus akaun VLESS, VMess, Trojan dan SSH di VPS autoscript (admin; trial awam untuk orang lain bila admin hidupkan)
 # Konfigurasi: /etc/tbot/config  (TOKEN=... dan ADMINS=id1,id2). Tiada rahsia dalam fail ni.
 import base64
+import copy
 import datetime
 import html
 import json
@@ -114,7 +115,7 @@ MAIN_KB = [
     [btn("➕ Trojan", "m:tr"), btn("➕ SSH", "m:ss")],
     [btn("📋 Senarai", "m:ls"), btn("🔎 Semak", "m:ck")],
     [btn("🔁 Renew", "m:rn"), btn("🗑 Padam", "m:dl")],
-    [btn("ℹ️ Status", "m:st")],
+    [btn("ℹ️ Status", "m:st"), btn("🎁 Trial", "m:tl")],
 ]
 
 
@@ -1061,10 +1062,12 @@ def on_command(chat, text):
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
             "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
-            "/status - servis VPS", "/batal - berhenti soalan"]))
+            "/status - servis VPS", "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
         STATE.pop(chat, None)
         send(chat, "Batal.", MAIN_KB)
+    elif cmd in ("/trial", "/trialon", "/trialoff", "/trialset", "/trialban", "/trialbuka", "/trialuji"):
+        trial_cmd(chat, cmd, a)
     elif cmd == "/senarai":
         send(chat, list_msg(), MAIN_KB)
     elif cmd == "/status":
@@ -1141,6 +1144,8 @@ def on_callback(chat, data):
             send(chat, list_msg(), MAIN_KB)
         elif what == "st":
             send(chat, status_msg(), MAIN_KB)
+        elif what == "tl":
+            send(chat, trial_admin_msg(), MAIN_KB)
         elif what in ("ck", "dl", "rn"):
             send(chat, "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("VMess", "%s:m" % what)],
                                         [btn("Trojan", "%s:t" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
@@ -1186,6 +1191,317 @@ def on_callback(chat, data):
         send(chat, "\n".join(out).rstrip(), telco_kb(user, kind))
 
 
+# ---------------------------------------------------------------- TRIAL AWAM
+# Orang lain (bukan admin) boleh minta akaun trial: pilih jenis, pilih telco, dapat akaun. Hidup bila admin taip /trialon.
+# Akaun dipadam sendiri bila tamat. Fail tetapan dan rekod: /etc/tbot/trial.json (tiada rahsia akaun disimpan di situ).
+TRIAL_F = "/etc/tbot/trial.json"
+TRIAL_KIND = {"v": "VLESS", "m": "VMess", "t": "Trojan", "s": "SSH"}
+TRIAL_DEF = {"aktif": False, "minit": 60, "jam": 24, "had_aktif": 20, "had_sehari": 30, "kuota": 2, "iplimit": 1,
+             "jenis": ["v", "m", "t", "s"], "hubung": "", "banned": [], "last": {}, "rec": [], "hari": "", "kira": 0}
+TRIAL_RANGE = {"minit": (5, 1440), "jam": (1, 720), "had_aktif": (1, 200), "had_sehari": (1, 1000),
+               "kuota": (1, 50), "iplimit": (1, 3)}
+TRIAL_ALIAS = {"minit": "minit", "jam": "jam", "aktif": "had_aktif", "sehari": "had_sehari", "kuota": "kuota", "ip": "iplimit"}
+HUBUNG_RE = re.compile(r"^@?[A-Za-z0-9_]{3,32}$")
+TRIAL_SENYAP = {}
+
+
+def trial_load():
+    d = copy.deepcopy(TRIAL_DEF)
+    try:
+        with open(P(TRIAL_F)) as f:
+            j = json.load(f)
+        if isinstance(j, dict):
+            d.update(j)
+    except (OSError, ValueError):
+        pass
+    d["jenis"] = [k for k in d.get("jenis", []) if k in TRIAL_KIND]
+    return d
+
+
+def trial_save(d):
+    p = P(TRIAL_F)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+
+def trial_tempoh(sec):
+    m = int((sec + 59) // 60)
+    if m >= 120:
+        return "%d jam %d minit" % (m // 60, m % 60) if m % 60 else "%d jam" % (m // 60)
+    return "%d minit" % max(m, 1)
+
+
+def trial_tunggu(d, uid):
+    return max(0, d["last"].get(str(uid), 0) + d["jam"] * 3600 - time.time())
+
+
+def trial_hubung(d):
+    h = d.get("hubung", "")
+    return ("\nNak akaun penuh, hubungi %s" % E(h if h.startswith("@") else "@" + h)) if h else ""
+
+
+def trial_nama(kind):
+    if kind == "s":
+        return "trial" + "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(4))
+    return "Trial-" + "".join(secrets.choice("XYZ0123456789") for _ in range(4))
+
+
+def trial_start(chat, frm):
+    uid = frm["id"]
+    adm = uid in ADMINS
+    d = trial_load()
+    if not d["aktif"] or (uid in d["banned"] and not adm):
+        return
+    now = time.time()
+    if not adm:
+        if now - TRIAL_SENYAP.get(uid, 0) < 2:
+            return
+        if len(TRIAL_SENYAP) > 2000:
+            TRIAL_SENYAP.clear()
+        TRIAL_SENYAP[uid] = now
+    if not d["jenis"]:
+        return
+    mine = [r for r in d["rec"] if r["uid"] == uid]
+    if mine:
+        r = mine[0]
+        send(chat, "Kau masih ada trial %s (%s). Tamat dalam %s." % (
+            TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(r["tamat"] - now)) + trial_hubung(d))
+        return
+    w = 0 if adm else trial_tunggu(d, uid)
+    if w > 0:
+        send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
+        return
+    kb = rows([btn("🎁 " + TRIAL_KIND[k], "pt:%s" % k) for k in d["jenis"]], 2)
+    send(chat, "\n".join(["🎁 <b>Trial percuma</b>  ✦ kancil ecem",
+                          "Tempoh %s • kuota %d GB • %d peranti" % (trial_tempoh(d["minit"] * 60), d["kuota"], d["iplimit"]),
+                          "Satu trial setiap %d jam." % d["jam"], "", "Pilih jenis akaun:"]), kb)
+
+
+def trial_cb(chat, frm, data):
+    p = data.split(":")
+    d = trial_load()
+    uid = frm["id"]
+    if not d["aktif"] or (uid in d["banned"] and uid not in ADMINS):
+        return
+    if len(p) < 2 or p[1] not in d["jenis"]:
+        send(chat, "Jenis ni tak dibuka. Taip /start.")
+        return
+    kind = p[1]
+    if p[0] == "pt":
+        if kind == "s":
+            trial_buat(chat, frm, kind, 0)
+            return
+        T = telcos()
+        b = [btn(t[0], "pc:%s:%d" % (kind, i + 1)) for i, t in enumerate(T)]
+        kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0" % kind)]]
+        send(chat, "Pilih telco kau:", kb)
+    elif p[0] == "pc" and len(p) == 3 and p[2].isdigit():
+        trial_buat(chat, frm, kind, int(p[2]))
+
+
+def trial_msg(kind, r, tl, minit, d):
+    now = time.time()
+    t = ["🎁 <b>Trial %s</b>  ✦ kancil ecem" % TRIAL_KIND[kind]]
+    if kind == "s":
+        t += ["User     : %s" % code(r["user"]), "Password : %s" % code(r["pw"]), "Host     : %s" % code(domain()),
+              "Had     : %d peranti, %d GB" % (r["ip"], r["quota"]),
+              "Tamat    : dalam %s" % trial_tempoh(minit * 60), "", "<pre>%s</pre>" % E(SSH_PORTS)]
+    else:
+        info = [l for l in acct_info(kind, r["user"], r["uuid"], r["exp"]) if not l.startswith(("Luput", "Nota"))]
+        t += info + ["Tamat  : dalam %s" % trial_tempoh(minit * 60)]
+        if tl:
+            t += ["", "<b>Link %s</b>" % E(tl[0]), code(telco_link(r["uuid"], r["user"], tl, kind))]
+        else:
+            for lab, lk in std_links(kind, r["user"], r["uuid"]):
+                t += ["", "<b>%s</b>" % E(lab), code(lk)]
+    t.append(trial_hubung(d).strip("\n"))
+    return "\n".join(x for x in t if x is not None)
+
+
+def trial_buat(chat, frm, kind, n):
+    d = trial_load()
+    uid = frm["id"]
+    adm = uid in ADMINS
+    if not d["aktif"] or kind not in d["jenis"]:
+        send(chat, "Trial tak dibuka sekarang.")
+        return
+    if any(r["uid"] == uid for r in d["rec"]):
+        send(chat, "Kau masih ada trial aktif." + trial_hubung(d))
+        return
+    w = 0 if adm else trial_tunggu(d, uid)
+    if w > 0:
+        send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
+        return
+    hari = today().isoformat()
+    if d["hari"] != hari:
+        d["hari"], d["kira"] = hari, 0
+    if len(d["rec"]) >= d["had_aktif"] or d["kira"] >= d["had_sehari"]:
+        send(chat, "Trial penuh buat masa ni. Cuba lagi nanti." + trial_hubung(d))
+        return
+    tl = None
+    if kind != "s" and n:
+        T = telcos()
+        if n < 1 or n > len(T):
+            send(chat, "Telco tak sah. Taip /start.")
+            return
+        tl = T[n - 1]
+    user = None
+    for _ in range(10):
+        c = trial_nama(kind)
+        if not name_taken(c):
+            user = c
+            break
+    if not user:
+        send(chat, "Maaf, tak dapat cipta akaun sekarang. Cuba lagi sebentar.")
+        return
+    if kind == "s":
+        pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
+        r, err = ssh_create(user, pw, 1, d["iplimit"], d["kuota"])
+    else:
+        r, err = xray_create(kind, user, 0, d["iplimit"], d["kuota"], nota="Trial tg:%d" % uid)
+    if not r:
+        log("trial gagal:", err)
+        send(chat, "Maaf, trial tak dapat dicipta sekarang. Cuba lagi sebentar.")
+        return
+    now = time.time()
+    d["rec"].append({"user": user, "kind": kind, "uid": uid, "chat": chat, "tamat": now + d["minit"] * 60})
+    if not adm:
+        d["last"][str(uid)] = now
+    d["last"] = {k: v for k, v in d["last"].items() if v + d["jam"] * 3600 > now}
+    d["kira"] += 1
+    trial_save(d)
+    send(chat, trial_msg(kind, r, tl, d["minit"], d))
+    nm = E(" ".join(x for x in (frm.get("first_name", ""), ("@" + frm["username"]) if frm.get("username") else "") if x) or "-")
+    note = "🎁 Trial %s%s  •  %s (<code>%d</code>)\n%s  •  aktif sekarang %d  •  hari ni %d" % (
+        TRIAL_KIND[kind], (" " + E(tl[0])) if tl else "", nm, uid, trial_tempoh(d["minit"] * 60), len(d["rec"]), d["kira"])
+    for a in ADMINS:
+        if a != chat:
+            send(a, note)
+
+
+def trial_sweep():
+    """Padam trial yang dah tamat. Dipanggil tiap pusingan bot (lebih kurang setiap 30 saat)."""
+    d = trial_load()
+    now = time.time()
+    due = [r for r in d["rec"] if r["tamat"] <= now and r.get("next", 0) <= now]
+    if not due:
+        return
+    for r in due:
+        if r["kind"] == "s":
+            ok, err = ssh_delete(r["user"])
+        else:
+            ok, err = xray_delete(r["kind"], r["user"])
+        if not ok and find(r["kind"], r["user"]) is not None:
+            r["cuba"] = r.get("cuba", 0) + 1
+            r["next"] = now + 120
+            log("trial gagal dipadam:", r["user"], err)
+            if r["cuba"] < 5:
+                continue
+            for a in ADMINS:
+                send(a, "⚠️ Trial %s tak dapat dipadam sendiri selepas 5 cubaan. Padam manual." % code(r["user"]))
+        d["rec"] = [x for x in d["rec"] if x is not r and not (x["user"] == r["user"] and x["kind"] == r["kind"])]
+        send(r["chat"], "⏰ Trial %s dah tamat dan dipadam. Terima kasih dah cuba!" % code(r["user"]) + trial_hubung(d))
+    # simpan dengan keadaan terkini (rekod yang masih tinggal + penanda cuba semula)
+    d2 = trial_load()
+    keep = {(x["user"], x["kind"]): x for x in d["rec"]}
+    d2["rec"] = [keep.get((x["user"], x["kind"]), x) for x in d2["rec"] if (x["user"], x["kind"]) in keep]
+    trial_save(d2)
+
+
+def trial_admin_msg():
+    d = trial_load()
+    now = time.time()
+    L = ["🎁 <b>Trial awam</b>  ✦ kancil ecem", "Status  : %s" % ("HIDUP" if d["aktif"] else "TUTUP"),
+         "Tempoh  : %s  •  kuota %d GB  •  %d IP" % (trial_tempoh(d["minit"] * 60), d["kuota"], d["iplimit"]),
+         "Ulang   : 1 setiap %d jam seorang" % d["jam"],
+         "Had     : aktif %d, sehari %d (hari ni %d)" % (d["had_aktif"], d["had_sehari"], d["kira"] if d["hari"] == today().isoformat() else 0),
+         "Jenis   : %s" % (", ".join(TRIAL_KIND[k] for k in d["jenis"]) or "tiada"),
+         "Hubungi : %s" % (E(d["hubung"]) if d["hubung"] else "-"),
+         "Disekat : %d orang" % len(d["banned"]), "", "Aktif sekarang: %d" % len(d["rec"])]
+    for r in d["rec"]:
+        L.append(" %s  %s  sisa %s  (tg:%d)" % (TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(max(0, r["tamat"] - now)), r["uid"]))
+    L += ["", "/trialon  /trialoff", "/trialset minit=60 jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama",
+          "/trialban ID  /trialbuka ID  /trialuji (cuba sendiri)"]
+    return "\n".join(L)
+
+
+def trial_cmd(chat, cmd, a):
+    d = trial_load()
+    if cmd == "/trial":
+        send(chat, trial_admin_msg(), MAIN_KB)
+    elif cmd == "/trialon":
+        if not d["jenis"]:
+            send(chat, "Tiada jenis dibenarkan. Guna /trialset jenis=v,m,t,s")
+            return
+        d["aktif"] = True
+        trial_save(d)
+        send(chat, "Trial HIDUP. Sesiapa yang taip /start kat bot ni boleh minta trial.\n\n" + trial_admin_msg(), MAIN_KB)
+    elif cmd == "/trialoff":
+        d["aktif"] = False
+        trial_save(d)
+        send(chat, "Trial TUTUP. Trial yang sedang jalan tetap dipadam bila tamat.", MAIN_KB)
+    elif cmd == "/trialset":
+        if not a:
+            send(chat, "Guna: /trialset minit=60 jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama (hubung=0 untuk padam)")
+            return
+        for tok in a:
+            if "=" not in tok:
+                send(chat, "Tak sah: %s. Guna bentuk nama=nilai." % code(tok))
+                return
+            k, v = tok.split("=", 1)
+            k = k.lower()
+            if k in TRIAL_ALIAS:
+                f = TRIAL_ALIAS[k]
+                lo, hi = TRIAL_RANGE[f]
+                if not v.isdigit() or not lo <= int(v) <= hi:
+                    send(chat, "%s mesti nombor %d hingga %d." % (code(k), lo, hi))
+                    return
+                d[f] = int(v)
+            elif k == "jenis":
+                js = [x for x in v.lower().split(",") if x]
+                if not js or any(x not in TRIAL_KIND for x in js):
+                    send(chat, "jenis: guna huruf v m t s dipisah koma. Contoh jenis=v,m")
+                    return
+                d["jenis"] = [x for x in "vmts" if x in js]
+            elif k == "hubung":
+                if v == "0":
+                    d["hubung"] = ""
+                elif HUBUNG_RE.match(v):
+                    d["hubung"] = v if v.startswith("@") else "@" + v
+                else:
+                    send(chat, "hubung: guna @nama Telegram (huruf, nombor, _).")
+                    return
+            else:
+                send(chat, "Tak dikenali: %s" % code(k))
+                return
+        trial_save(d)
+        send(chat, "Disimpan.\n\n" + trial_admin_msg(), MAIN_KB)
+    elif cmd in ("/trialban", "/trialbuka"):
+        if len(a) != 1 or not a[0].isdigit():
+            send(chat, "Guna: %s ID_Telegram (nombor)" % cmd)
+            return
+        i = int(a[0])
+        if cmd == "/trialban":
+            if i in ADMINS:
+                send(chat, "Itu admin.")
+                return
+            if i not in d["banned"]:
+                d["banned"].append(i)
+        else:
+            d["banned"] = [x for x in d["banned"] if x != i]
+        trial_save(d)
+        send(chat, "%s %d. Disekat sekarang: %d orang." % ("Disekat" if cmd == "/trialban" else "Dibuka", i, len(d["banned"])), MAIN_KB)
+    elif cmd == "/trialuji":
+        if not d["aktif"]:
+            send(chat, "Trial masih TUTUP. Taip /trialon dulu.")
+        else:
+            trial_start(chat, {"id": chat, "first_name": "admin"})
+
+
 def handle(u):
     if "callback_query" in u:
         cq = u["callback_query"]
@@ -1195,9 +1511,15 @@ def handle(u):
             tg("answerCallbackQuery", callback_query_id=cq["id"])
         except Exception:
             pass
-        if chat is None or cq["from"]["id"] not in ADMINS or (msg.get("chat") or {}).get("type") != "private":
+        if chat is None or (msg.get("chat") or {}).get("type") != "private":
             return
-        on_callback(chat, cq.get("data", ""))
+        data = cq.get("data", "")
+        if data.startswith(("pt:", "pc:")):
+            trial_cb(chat, cq["from"], data)
+            return
+        if cq["from"]["id"] not in ADMINS:
+            return
+        on_callback(chat, data)
         return
     msg = u.get("message")
     if not msg or "text" not in msg:
@@ -1208,6 +1530,9 @@ def handle(u):
     if msg["chat"].get("type") != "private":
         return
     if uid not in ADMINS:
+        if trial_load()["aktif"]:
+            trial_start(chat, msg["from"])
+            return
         # senyap: orang asing tak dapat balasan langsung. Cuma catat sekali setiap ID dalam log.
         if uid not in SEEN:
             if len(SEEN) > 1000:
@@ -1228,6 +1553,10 @@ def main():
     log("tbot mula, admin:", sorted(ADMINS))
     offset = None
     while True:
+        try:
+            trial_sweep()
+        except Exception:
+            log("trial_sweep ralat:", traceback.format_exc())
         try:
             params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
             if offset is not None:

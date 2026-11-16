@@ -443,6 +443,20 @@ kn_bot
 until [[ $timer =~ ^[0-9]+$ ]]; do
 read -p "Expired (Minutes): " timer
 done
+telco_init
+echo ""
+echo "Pilih telco untuk link tambahan:"
+ti=0
+while IFS='|' read -r tn _; do
+[[ -z $tn || $tn == \#* ]] && continue
+ti=$((ti+1))
+echo " $ti) $tn"
+done < $telco_conf
+echo " 0) semua telco"
+tsel="x"
+until [[ -z $tsel || ( $tsel =~ ^[0-9]+$ && $tsel -le $ti ) ]]; do
+read -rp "Telco (kosong = tiada): " tsel
+done
 user=Trial-`</dev/urandom tr -dc X-Z0-9 | head -c4`
 uuid=$(cat /proc/sys/kernel/random/uuid)
 masaaktif=0
@@ -538,6 +552,13 @@ _______________________________
 Link gRPC : vless://${uuid}@${domain}:443?mode=gun&security=tls&encryption=none&type=grpc&serviceName=vless-grpc&sni=${domain}#${user}
 _______________________________
 END
+telcolines="$(telco_links "$uuid" "$user" "$tsel")"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+echo "Link ${tn} : ${tl}" >> /home/vps/public_html/vless-$user.txt
+echo "_______________________________" >> /home/vps/public_html/vless-$user.txt
+done <<< "$telcolines"
+fi
 TEXT="$(kn_text "Trial VLESS" "$user" "$timer minit" "$iplim IP" "")"
 kn_send "$TEXT"
 cd
@@ -568,6 +589,11 @@ kn_mid
 kn_link "Link WS TLS" "${vlesslink1}"
 kn_link "Link WS NTLS" "${vlesslink2}"
 kn_link "Link gRPC" "${vlesslink3}"
+if [ -n "$telcolines" ]; then
+while IFS='|' read -r tn tl; do
+kn_link "Link ${tn}" "${tl}"
+done <<< "$telcolines"
+fi
 kn_link "Format OpenClash" "http://$domain:89/vless-$user.txt"
 kn_foot
 echo ""
