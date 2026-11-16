@@ -2161,9 +2161,11 @@ def kedai_start(chat, frm):
           [btn("📦 Akaun saya", "ky:akaun"), btn("📶 Telco berfungsi", "ky:telco")]]
     if T["aktif"] and T["jenis"]:
         kb.insert(0, [btn("🎁 Trial percuma", "ky:trial")])
+    nota = hc_nota_jenis(J, None, J["jenis"])
     send(chat, "\n".join(["✦ <b>KANCIL ECEM</b> ✦", "Developer by kancil ecem", "",
                           "Akaun %s: %s / %d hari" % (", ".join(TRIAL_KIND[k] for k in J["jenis"]), rm(J["sen"]), J["hari"]),
-                          "Bayar guna QR bank. Akaun dihantar kat sini lepas pembayaran disahkan.", "", "Pilih:"]), kb)
+                          "Bayar guna QR bank. Akaun dihantar kat sini lepas pembayaran disahkan."] +
+                         (["", nota] if nota else []) + ["", "Pilih:"]), kb)
 
 
 def jual_pay_screen(chat, o, J):
@@ -3109,8 +3111,12 @@ def hc_nota_jenis(J, vid, jenis):
     """Nota di skrin pilih jenis akaun: telco yang perlu SSH (fail HTTP Custom) lawan telco lain."""
     if "s" not in jenis:
         return ""
+    if vid is None:      # skrin /start: belum pilih server, senaraikan semua telco HC di server yang dibuka
+        senarai = [n for n in sorted(J.get("hc", {})) if telco_status(J, n) != "tak" and any(vps_dibuka(x) for x in hc_vids(J, n))]
+    else:
+        senarai = hc_boleh(J, vid)
     nm = []
-    for n in hc_boleh(J, vid):
+    for n in senarai:
         for x in (J.get("hc", {}).get(n, {}).get("lbl") or [n]):
             if x not in nm:
                 nm.append(x)
