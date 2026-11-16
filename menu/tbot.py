@@ -124,7 +124,8 @@ MAIN_KB = [
     [btn("➕ Trojan", "m:tr"), btn("➕ SSH", "m:ss")],
     [btn("📋 Senarai", "m:ls"), btn("🔎 Semak", "m:ck")],
     [btn("🔁 Renew", "m:rn"), btn("🗑 Padam", "m:dl")],
-    [btn("ℹ️ Status", "m:st"), btn("🎁 Trial", "m:tl"), btn("🛒 Jual", "m:jl")],
+    [btn("ℹ️ Status", "m:st"), btn("👥 Online", "m:on")],
+    [btn("🎁 Trial", "m:tl"), btn("🛒 Jual", "m:jl")],
 ]
 
 
@@ -1413,6 +1414,7 @@ def on_command(chat, text):
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/vps - senarai server (VPS) yang disambung ke bot, tukar, tambah, buang",
             "/speed [ID] - uji kelajuan (ping, download, upload) setiap server",
+            "/online [ID] - siapa tengah guna (SSH dan Xray) setiap server",
             "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
             "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
             "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
@@ -1444,6 +1446,8 @@ def on_command(chat, text):
         vps_cmd(chat, cmd, a)
     elif cmd == "/speed":
         speed_cmd(chat, a)
+    elif cmd == "/online":
+        online_cmd(chat, a)
     elif cmd == "/senarai":
         send(chat, vhead() + list_msg(), MAIN_KB)
     elif cmd == "/status":
@@ -1536,6 +1540,8 @@ def on_callback(chat, data):
             send(chat, vhead() + list_msg(), MAIN_KB)
         elif what == "st":
             send(chat, vhead() + status_msg(), MAIN_KB)
+        elif what == "on":
+            online_cmd(chat, [])
         elif what == "vp":
             vps_menu(chat)
         elif what == "tl":
@@ -3175,6 +3181,137 @@ def kedai_speed(chat, frm):
     send(chat, "⏳ Tengah uji kelajuan server, ambil lebih kurang %d saat. Sekejap..." % (35 * len(basi)))
     SPEED_T = threading.Thread(target=speed_kerja, args=(chat, False, basi, kb), daemon=True)
     SPEED_T.start()
+
+
+# ---------------------------------------------------------------- /online: siapa tengah guna
+# Skrip jalan terus kat setiap server (tak guna ejen tbot.py). SSH: proses sshd/dropbear yang masih hidup.
+# Xray: akaun yang ada sambungan diterima dalam 5 minit lepas (log akses Xray).
+ONLINE_TETAP = 300
+ONLINE_SH = r"""R="${TBOT_ROOT:-}"
+XL="$R/var/log/xray/access.log"
+AL="$R/var/log/auth.log"; [ -e "$R/var/log/secure" ] && AL="$R/var/log/secure"
+PS=$(ps -eo pid=,args= 2>/dev/null)
+if [ -r "$AL" ]; then
+  echo "$PS" | awk '$2=="sshd:" && $4=="[priv]" && $3!="root" && $3!="unknown" {print $1, $3}' | while read p u; do
+    ip=$(grep "sshd\[$p\]: Accepted" "$AL" 2>/dev/null | tail -n 1 | awk '{i=index($0," from "); if (i) {split(substr($0,i+6),a," "); print a[1]}}')
+    echo "S $u $ip"
+  done
+  echo "$PS" | awk '$2 ~ /(^|\/)dropbear$/ {print $1}' | while read p; do
+    grep "dropbear\[$p\]: .*auth succeeded" "$AL" 2>/dev/null | tail -n 1 | awk '{i=index($0,"succeeded for "); if (!i) next; n=split(substr($0,i+14),a," "); u=a[1]; gsub("\047","",u); ip=a[3]; sub(/:[0-9]+$/,"",ip); if (u!="") print "S " u " " ip}'
+  done
+else
+  echo NOAUTH
+fi
+if [ -r "$XL" ]; then
+  C=$(date -d "-@SAAT@ seconds" "+%Y/%m/%d %H:%M:%S" 2>/dev/null)
+  tail -n 20000 "$XL" | awk -v c="$C" 'substr($0,1,19)>=c && /accepted/ && /email: / {u=$0; sub(/.*email: /,"",u); sub(/[ \t].*/,"",u); ip=""; if (match($0,/[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/)) ip=substr($0,RSTART,RLENGTH); if (u!="") print "X " u " " ip}'
+else
+  echo NOXRAY
+fi
+""".replace("@SAAT@", str(ONLINE_TETAP))
+ONLINE_LOCK = threading.Lock()
+ONLINE_T = None
+
+
+def online_parse(out):
+    """Keluaran skrip -> (SSH {nama: [ip, ...] satu setiap sesi}, Xray {nama: {ip, ...}}, penanda NOAUTH/NOXRAY)."""
+    S, X, n = {}, {}, set()
+    for l in out.splitlines():
+        p = l.split()
+        if not p:
+            continue
+        if p[0] == "S" and len(p) >= 2:
+            S.setdefault(p[1], []).append(p[2] if len(p) > 2 else "")
+        elif p[0] == "X" and len(p) >= 2 and p[1] != "default":
+            X.setdefault(p[1], set()).add(p[2] if len(p) > 2 else "")
+        elif p[0] in ("NOAUTH", "NOXRAY"):
+            n.add(p[0])
+    return S, X, n
+
+
+def online_ukur(v):
+    """Semak satu server. Pulang {"e": ralat (kosong = berjaya), "S", "X", "n"}."""
+    h = {"e": "", "S": {}, "X": {}, "n": set()}
+    try:
+        if v["id"] == "local":
+            pr = subprocess.run(["sh", "-c", ONLINE_SH], capture_output=True, timeout=25)
+            rc, out, err = pr.returncode, pr.stdout.decode("utf-8", "replace"), pr.stderr.decode("utf-8", "replace")
+        else:
+            rc, out, err = ssh_run(v, "sh -c " + shlex.quote(ONLINE_SH), b"", 25)
+    except subprocess.TimeoutExpired:
+        h["e"] = "server lambat balas"
+        return h
+    except VPSError as e:
+        h["e"] = str(e)
+        return h
+    except Exception as e:
+        log("online gagal:", e)
+        h["e"] = "ralat: " + str(e)[:100]
+        return h
+    if rc == 255:
+        h["e"] = "tak dapat sambung: " + _ralat_ssh(err)
+        return h
+    h["S"], h["X"], h["n"] = online_parse(out)
+    return h
+
+
+def online_baris(v, h, multi):
+    kepala = "🖥 <b>%s</b>" % E(v["nama"]) + (("  <code>%s</code>" % E(v["id"])) if multi else "")
+    if h["e"]:
+        return kepala + "\n   ❌ " + E(h["e"])
+    L = [kepala]
+    if "NOAUTH" in h["n"]:
+        L.append("   SSH: log login tak jumpa (/var/log/auth.log), tak dapat dikesan")
+    elif h["S"]:
+        L.append("   SSH (%d): %s" % (len(h["S"]), ", ".join(
+            E(u) + ((" ×%d" % len(h["S"][u])) if len(h["S"][u]) > 1 else "") for u in sorted(h["S"]))))
+    if "NOXRAY" in h["n"]:
+        L.append("   Xray: log akses tak jumpa (/var/log/xray/access.log)")
+    elif h["X"]:
+        def ipn(u):
+            n = len({i for i in h["X"][u] if i and i != "127.0.0.1"})
+            return (" (%d IP)" % n) if n > 1 else ""
+        L.append("   Xray (%d): %s" % (len(h["X"]), ", ".join(E(u) + ipn(u) for u in sorted(h["X"]))))
+    if len(L) == 1:
+        L.append("   Tiada sesiapa online")
+    return "\n".join(L)
+
+
+def online_laporan(S, H):
+    multi = vps_multi()
+    jum = sum(len(H[v["id"]]["S"]) + len(H[v["id"]]["X"]) for v in S)
+    L = ["👥 <b>Pengguna online</b>", "Jumlah: <b>%d</b> akaun" % jum, ""]
+    for v in S:
+        L += [online_baris(v, H[v["id"]], multi), ""]
+    L.append("SSH = sambungan yang masih hidup (×N = bilangan sesi). Xray = ada sambungan dalam %d minit lepas. "
+             "(N IP) = akaun dipakai dari lebih satu IP, mungkin dikongsi." % (ONLINE_TETAP // 60))
+    return "\n".join(L)
+
+
+def online_kerja(chat, senarai):
+    try:
+        H = {v["id"]: online_ukur(v) for v in senarai}
+        send(chat, online_laporan(senarai, H), MAIN_KB)
+    except Exception as e:
+        log("online gagal:", e)
+    finally:
+        ONLINE_LOCK.release()
+
+
+def online_cmd(chat, a):
+    """Admin: /online [ID]  siapa tengah guna SSH dan Xray setiap server (atau satu server)."""
+    global ONLINE_T
+    S = vps_semua()
+    if a:
+        S = [v for v in S if v["id"] == a[0].lower()]
+        if not S:
+            send(chat, "Server <code>%s</code> tak jumpa. Taip /vps untuk senarai ID." % E(a[0][:20]))
+            return
+    if not ONLINE_LOCK.acquire(blocking=False):
+        send(chat, "Semakan online tengah jalan. Tunggu sekejap.")
+        return
+    ONLINE_T = threading.Thread(target=online_kerja, args=(chat, S), daemon=True)
+    ONLINE_T.start()
 
 
 def vps_cmd(chat, cmd, a):
