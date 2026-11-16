@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 import traceback
+import unicodedata
 import urllib.request
 import uuid as uuidlib
 
@@ -115,7 +116,7 @@ MAIN_KB = [
     [btn("➕ Trojan", "m:tr"), btn("➕ SSH", "m:ss")],
     [btn("📋 Senarai", "m:ls"), btn("🔎 Semak", "m:ck")],
     [btn("🔁 Renew", "m:rn"), btn("🗑 Padam", "m:dl")],
-    [btn("ℹ️ Status", "m:st"), btn("🎁 Trial", "m:tl")],
+    [btn("ℹ️ Status", "m:st"), btn("🎁 Trial", "m:tl"), btn("🛒 Jual", "m:jl")],
 ]
 
 
@@ -1062,12 +1063,15 @@ def on_command(chat, text):
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
             "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
-            "/status - servis VPS", "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)", "/batal - berhenti soalan"]))
+            "/status - servis VPS", "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
+            "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
         STATE.pop(chat, None)
         send(chat, "Batal.", MAIN_KB)
     elif cmd in ("/trial", "/trialon", "/trialoff", "/trialset", "/trialban", "/trialbuka", "/trialuji"):
         trial_cmd(chat, cmd, a)
+    elif cmd in ("/jual", "/jualon", "/jualoff", "/jualset", "/jualnota", "/order", "/sahkan", "/tolak"):
+        jual_cmd(chat, cmd, a)
     elif cmd == "/senarai":
         send(chat, list_msg(), MAIN_KB)
     elif cmd == "/status":
@@ -1146,6 +1150,8 @@ def on_callback(chat, data):
             send(chat, status_msg(), MAIN_KB)
         elif what == "tl":
             send(chat, trial_admin_msg(), MAIN_KB)
+        elif what == "jl":
+            send(chat, jual_admin_msg(), MAIN_KB)
         elif what in ("ck", "dl", "rn"):
             send(chat, "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("VMess", "%s:m" % what)],
                                         [btn("Trojan", "%s:t" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
@@ -1172,6 +1178,8 @@ def on_callback(chat, data):
             send(chat, "Akaun tak jumpa.", MAIN_KB)
             return
         start_flow(chat, "nt", {"kind": kind, "user": user})
+    elif k in ("ok", "no") and len(p) == 2 and re.match(r"^[A-Za-z0-9]{5}$", p[1]):
+        (jual_sahkan if k == "ok" else jual_tolak)(p[1].upper(), chat)
     elif k in ("t", "tm", "tt"):
         kind = {"t": "v", "tm": "m", "tt": "t"}[k]
         q = data.split(":")
@@ -1198,8 +1206,8 @@ TRIAL_F = "/etc/tbot/trial.json"
 TRIAL_KIND = {"v": "VLESS", "m": "VMess", "t": "Trojan", "s": "SSH"}
 TRIAL_DEF = {"aktif": False, "minit": 60, "jam": 24, "had_aktif": 20, "had_sehari": 30, "kuota": 2, "iplimit": 1,
              "jenis": ["v", "m", "t", "s"], "hubung": "", "banned": [], "last": {}, "rec": [], "hari": "", "kira": 0}
-TRIAL_RANGE = {"minit": (5, 1440), "jam": (1, 720), "had_aktif": (1, 200), "had_sehari": (1, 1000),
-               "kuota": (1, 50), "iplimit": (1, 3)}
+TRIAL_RANGE = {"minit": (5, 10080), "jam": (1, 720), "had_aktif": (1, 200), "had_sehari": (1, 1000),
+               "kuota": (0, 9999), "iplimit": (1, 3)}
 TRIAL_ALIAS = {"minit": "minit", "jam": "jam", "aktif": "had_aktif", "sehari": "had_sehari", "kuota": "kuota", "ip": "iplimit"}
 HUBUNG_RE = re.compile(r"^@?[A-Za-z0-9_]{3,32}$")
 TRIAL_SENYAP = {}
@@ -1230,9 +1238,15 @@ def trial_save(d):
 
 def trial_tempoh(sec):
     m = int((sec + 59) // 60)
+    if m >= 1440 and m % 1440 == 0:
+        return "%d hari" % (m // 1440)
     if m >= 120:
         return "%d jam %d minit" % (m // 60, m % 60) if m % 60 else "%d jam" % (m // 60)
     return "%d minit" % max(m, 1)
+
+
+def trial_gb(q):
+    return "tiada had" if q in (0, 9999) else "%d GB" % q
 
 
 def trial_tunggu(d, uid):
@@ -1277,7 +1291,7 @@ def trial_start(chat, frm):
         return
     kb = rows([btn("🎁 " + TRIAL_KIND[k], "pt:%s" % k) for k in d["jenis"]], 2)
     send(chat, "\n".join(["🎁 <b>Trial percuma</b>  ✦ kancil ecem",
-                          "Tempoh %s • kuota %d GB • %d peranti" % (trial_tempoh(d["minit"] * 60), d["kuota"], d["iplimit"]),
+                          "Tempoh %s • kuota %s • %d peranti" % (trial_tempoh(d["minit"] * 60), trial_gb(d["kuota"]), d["iplimit"]),
                           "Satu trial setiap %d jam." % d["jam"], "", "Pilih jenis akaun:"]), kb)
 
 
@@ -1308,7 +1322,7 @@ def trial_msg(kind, r, tl, minit, d):
     t = ["🎁 <b>Trial %s</b>  ✦ kancil ecem" % TRIAL_KIND[kind]]
     if kind == "s":
         t += ["User     : %s" % code(r["user"]), "Password : %s" % code(r["pw"]), "Host     : %s" % code(domain()),
-              "Had     : %d peranti, %d GB" % (r["ip"], r["quota"]),
+              "Had     : %d peranti, kuota %s" % (r["ip"], trial_gb(r["quota"])),
               "Tamat    : dalam %s" % trial_tempoh(minit * 60), "", "<pre>%s</pre>" % E(SSH_PORTS)]
     else:
         info = [l for l in acct_info(kind, r["user"], r["uuid"], r["exp"]) if not l.startswith(("Luput", "Nota"))]
@@ -1358,11 +1372,13 @@ def trial_buat(chat, frm, kind, n):
     if not user:
         send(chat, "Maaf, tak dapat cipta akaun sekarang. Cuba lagi sebentar.")
         return
+    # tarikh luput dalam akaun mesti SELEPAS hari trial tamat: pembersihan harian (tengah malam) padam akaun yang luput <= hari ni
+    dd = (datetime.date.fromtimestamp(time.time() + d["minit"] * 60) - today()).days + 1
     if kind == "s":
         pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8))
-        r, err = ssh_create(user, pw, 1, d["iplimit"], d["kuota"])
+        r, err = ssh_create(user, pw, dd, d["iplimit"], d["kuota"])
     else:
-        r, err = xray_create(kind, user, 0, d["iplimit"], d["kuota"], nota="Trial tg:%d" % uid)
+        r, err = xray_create(kind, user, dd, d["iplimit"], d["kuota"], nota="Trial tg:%d" % uid)
     if not r:
         log("trial gagal:", err)
         send(chat, "Maaf, trial tak dapat dicipta sekarang. Cuba lagi sebentar.")
@@ -1416,7 +1432,7 @@ def trial_admin_msg():
     d = trial_load()
     now = time.time()
     L = ["🎁 <b>Trial awam</b>  ✦ kancil ecem", "Status  : %s" % ("HIDUP" if d["aktif"] else "TUTUP"),
-         "Tempoh  : %s  •  kuota %d GB  •  %d IP" % (trial_tempoh(d["minit"] * 60), d["kuota"], d["iplimit"]),
+         "Tempoh  : %s  •  kuota %s  •  %d IP" % (trial_tempoh(d["minit"] * 60), trial_gb(d["kuota"]), d["iplimit"]),
          "Ulang   : 1 setiap %d jam seorang" % d["jam"],
          "Had     : aktif %d, sehari %d (hari ni %d)" % (d["had_aktif"], d["had_sehari"], d["kira"] if d["hari"] == today().isoformat() else 0),
          "Jenis   : %s" % (", ".join(TRIAL_KIND[k] for k in d["jenis"]) or "tiada"),
@@ -1424,7 +1440,7 @@ def trial_admin_msg():
          "Disekat : %d orang" % len(d["banned"]), "", "Aktif sekarang: %d" % len(d["rec"])]
     for r in d["rec"]:
         L.append(" %s  %s  sisa %s  (tg:%d)" % (TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(max(0, r["tamat"] - now)), r["uid"]))
-    L += ["", "/trialon  /trialoff", "/trialset minit=60 jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama",
+    L += ["", "/trialon  /trialoff", "/trialset minit=60 (atau hari=1) jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama",
           "/trialban ID  /trialbuka ID  /trialuji (cuba sendiri)"]
     return "\n".join(L)
 
@@ -1446,7 +1462,7 @@ def trial_cmd(chat, cmd, a):
         send(chat, "Trial TUTUP. Trial yang sedang jalan tetap dipadam bila tamat.", MAIN_KB)
     elif cmd == "/trialset":
         if not a:
-            send(chat, "Guna: /trialset minit=60 jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama (hubung=0 untuk padam)")
+            send(chat, "Guna: /trialset minit=60 (atau hari=1) jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama (hubung=0 untuk padam, kuota=0 tiada had)")
             return
         for tok in a:
             if "=" not in tok:
@@ -1458,9 +1474,14 @@ def trial_cmd(chat, cmd, a):
                 f = TRIAL_ALIAS[k]
                 lo, hi = TRIAL_RANGE[f]
                 if not v.isdigit() or not lo <= int(v) <= hi:
-                    send(chat, "%s mesti nombor %d hingga %d." % (code(k), lo, hi))
+                    send(chat, "%s mesti nombor %d hingga %d%s." % (code(k), lo, hi, " (0 = tiada had)" if f == "kuota" else ""))
                     return
                 d[f] = int(v)
+            elif k == "hari":
+                if not v.isdigit() or not 1 <= int(v) <= 7:
+                    send(chat, "%s mesti nombor 1 hingga 7." % code(k))
+                    return
+                d["minit"] = int(v) * 1440
             elif k == "jenis":
                 js = [x for x in v.lower().split(",") if x]
                 if not js or any(x not in TRIAL_KIND for x in js):
@@ -1502,6 +1523,528 @@ def trial_cmd(chat, cmd, a):
             trial_start(chat, {"id": chat, "first_name": "admin"})
 
 
+# ---------------------------------------------------------------- KEDAI (jual akaun, bayar QR bank, admin sahkan)
+# Pelanggan: Beli / Renew / Akaun saya. Bayar guna QR bank admin, hantar resit kat bot. Resit sampai kat admin dengan butang
+# Sahkan / Tolak. Akaun dicipta (ikut nama Telegram pelanggan) hanya bila admin tekan Sahkan. QR bank biasa tak boleh
+# bagitahu bot duit dah masuk, jadi admin yang semak duit dalam bank dulu.
+# Tetapan dan rekod: /etc/tbot/jual.json (tiada UUID atau password disimpan di situ).
+JUAL_F = "/etc/tbot/jual.json"
+JUAL_DEF = {"aktif": False, "sen": 1000, "hari": 30, "kuota": 0, "iplimit": 2, "jenis": ["v", "m", "t", "s"], "luput": 24,
+            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}}
+JUAL_RANGE = {"hari": (1, 365), "kuota": (0, 9999), "ip": (0, 20), "luput": (1, 168)}
+RM_RE = re.compile(r"^\d{1,4}(\.\d{1,2})?$")
+KEDAI_SENYAP = {}
+KEDAI_CB = ("ky:", "kb:", "kr:", "ka:", "kt:", "kx:")
+
+
+def jual_load():
+    d = copy.deepcopy(JUAL_DEF)
+    try:
+        with open(P(JUAL_F)) as f:
+            j = json.load(f)
+        if isinstance(j, dict):
+            d.update(j)
+    except (OSError, ValueError):
+        pass
+    d["jenis"] = [k for k in d.get("jenis", []) if k in TRIAL_KIND]
+    return d
+
+
+def jual_save(d):
+    if len(d["orders"]) > 1500:
+        done = [o for o in d["orders"] if o["status"] in ("tolak", "batal")]
+        drop = {o["id"] for o in done[:len(d["orders"]) - 1500]}
+        d["orders"] = [o for o in d["orders"] if o["id"] not in drop]
+    p = P(JUAL_F)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+
+def rm(sen):
+    return "RM%d" % (sen // 100) if sen % 100 == 0 else "RM%d.%02d" % (sen // 100, sen % 100)
+
+
+def jual_hidup(d):
+    return bool(d["aktif"] and d["qr"] and d["jenis"])
+
+
+def tg_nama(frm):
+    return " ".join(x for x in (frm.get("first_name", ""), ("@" + frm["username"]) if frm.get("username") else "") if x) or "-"
+
+
+def jual_nama(frm, kind):
+    """Nama akaun ikut nama Telegram: username kalau ada, kalau tak nama pertama. Huruf, nombor, _ . - sahaja."""
+    base = frm.get("username") or frm.get("first_name") or ""
+    base = unicodedata.normalize("NFKD", base).encode("ascii", "ignore").decode()
+    base = re.sub(r"[^A-Za-z0-9_.-]", "", base)[:24].strip(".-")
+    if kind == "s":
+        base = re.sub(r"[^a-z0-9_-]", "", base.lower())
+    if not base:
+        base = "user%d" % (frm["id"] % 10000)
+    if not re.match(r"[A-Za-z_]", base):
+        base = "u" + base
+    if base.lower().startswith("trial"):
+        base = "u" + base
+    for cand in [base] + ["%s-%d" % (base, i) for i in range(2, 10)]:
+        if not name_taken(cand):
+            return cand
+    for _ in range(10):
+        cand = "%s%03d" % (base[:20], secrets.randbelow(1000))
+        if not name_taken(cand):
+            return cand
+    return None
+
+
+def jual_order_id(d):
+    while True:
+        i = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(5))
+        if not any(o["id"] == i for o in d["orders"]):
+            return i
+
+
+def jual_cari(d, oid):
+    for o in d["orders"]:
+        if o["id"] == oid:
+            return o
+    return None
+
+
+def jual_buka(d, uid):
+    for o in d["orders"]:
+        if o["uid"] == uid and o["status"] in ("menunggu_bayar", "menunggu_sah"):
+            return o
+    return None
+
+
+def send_photo(chat, file_id, caption, kb=None):
+    p = {"chat_id": chat, "photo": file_id, "caption": caption[:1000], "parse_mode": "HTML"}
+    if kb:
+        p["reply_markup"] = {"inline_keyboard": kb}
+    try:
+        tg("sendPhoto", **p)
+    except Exception as e:
+        log("sendPhoto gagal:", e)
+        send(chat, caption, kb)
+
+
+def kedai_aktif():
+    return trial_load()["aktif"] or jual_hidup(jual_load())
+
+
+def kedai_start(chat, frm):
+    uid = frm["id"]
+    adm = uid in ADMINS
+    J = jual_load()
+    T = trial_load()
+    if not jual_hidup(J):
+        if T["aktif"]:
+            trial_start(chat, frm)
+        return
+    if uid in T["banned"] and not adm:
+        return
+    now = time.time()
+    if not adm:
+        if now - KEDAI_SENYAP.get(uid, 0) < 2:
+            return
+        if len(KEDAI_SENYAP) > 2000:
+            KEDAI_SENYAP.clear()
+        KEDAI_SENYAP[uid] = now
+    kb = [[btn("🛒 Beli akaun", "ky:beli"), btn("🔁 Renew", "ky:renew")], [btn("📦 Akaun saya", "ky:akaun")]]
+    if T["aktif"] and T["jenis"]:
+        kb.insert(0, [btn("🎁 Trial percuma", "ky:trial")])
+    send(chat, "\n".join(["✦ <b>KANCIL ECEM</b> ✦", "Developer by kancil ecem", "",
+                          "Akaun %s: %s / %d hari" % (", ".join(TRIAL_KIND[k] for k in J["jenis"]), rm(J["sen"]), J["hari"]),
+                          "Bayar guna QR bank. Akaun dihantar kat sini lepas pembayaran disahkan.", "", "Pilih:"]), kb)
+
+
+def jual_pay_screen(chat, o, J):
+    t = ["🛒 <b>Order %s</b>" % code(o["id"]),
+         ("%s • %d hari • %s" % (TRIAL_KIND[o["kind"]], o["hari"], rm(o["sen"]))) if o["jenis"] == "baru" else
+         ("Renew %s %s • tambah %d hari • %s" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"], rm(o["sen"])))]
+    t += ["", "1) Scan QR dan bayar <b>%s</b> tepat." % rm(o["sen"]),
+          "2) Letak kod %s dalam rujukan atau catatan bayaran." % code(o["id"]),
+          "3) Hantar <b>gambar resit</b> kat sini.",
+          "Akaun dicipta lepas admin sahkan duit dah masuk."]
+    if J["nota"]:
+        t += ["", E(J["nota"])]
+    send_photo(chat, J["qr"], "\n".join(t), [[btn("❌ Batal order", "kx:%s" % o["id"])]])
+
+
+def jual_order_baru(chat, frm, kind, jenis, user=""):
+    J = jual_load()
+    uid = frm["id"]
+    if not jual_hidup(J) or kind not in J["jenis"]:
+        send(chat, "Jualan tak dibuka sekarang.")
+        return
+    o = jual_buka(J, uid)
+    if o:
+        if o["status"] == "menunggu_sah":
+            send(chat, "Kau ada order %s yang tengah disemak admin. Tunggu sekejap." % code(o["id"]))
+        else:
+            send(chat, "Kau ada order yang belum bayar:")
+            jual_pay_screen(chat, o, J)
+        return
+    o = {"id": jual_order_id(J), "uid": uid, "chat": chat, "nama": tg_nama(frm), "tg": frm.get("username", ""),
+         "fn": frm.get("first_name", ""), "kind": kind, "jenis": jenis, "user": user, "sen": J["sen"], "hari": J["hari"],
+         "t": time.time(), "status": "menunggu_bayar", "resit": 0}
+    J["orders"].append(o)
+    jual_save(J)
+    jual_pay_screen(chat, o, J)
+
+
+def jual_miliknya(J, uid):
+    out = []
+    for key, own in J["akaun"].items():
+        if own != uid:
+            continue
+        k, u = key.split(":", 1)
+        a = find(k, u)
+        if a:
+            out.append((k, u, a))
+    return out
+
+
+def jual_kb_telco(kind, user):
+    b = [btn(t[0], "kt:%s:%s:%d" % (kind, user, i + 1)) for i, t in enumerate(telcos())]
+    kb = rows(b, 3)
+    kb.append([btn("Semua telco", "kt:%s:%s:0" % (kind, user))])
+    return kb
+
+
+def jual_butiran(kind, user, a, kepala="Akaun %s"):
+    """a = padanan find(): (nama, luput, uuid/kata laluan). Teks HTML butiran akaun untuk pelanggan."""
+    if kind == "s":
+        pw, exp = a[2], a[1]
+        t = ["<b>%s</b>  ✦ kancil ecem" % (kepala % "SSH"), "User     : %s" % code(user), "Password : %s" % code(pw),
+             "Host     : %s" % code(domain()), "Luput    : %s (%d hari)" % (E(exp), days_left(exp)),
+             "", "<pre>%s</pre>" % E(SSH_PORTS)]
+        return "\n".join(t)
+    t = ["<b>%s</b>  ✦ kancil ecem" % (kepala % TRIAL_KIND[kind])]
+    t += [l for l in acct_info(kind, user, a[2], a[1]) if not l.startswith("Nota")]
+    for lab, lk in std_links(kind, user, a[2]):
+        t += ["", "<b>%s</b>" % E(lab), code(lk)]
+    t += ["", "OpenClash: " + code("http://%s:89/%s-%s.txt" % (domain(), KIND[kind]["pub"], user)), "", "Pilih telco untuk link tambahan:"]
+    return "\n".join(t)
+
+
+def jual_hantar_akaun(chat, kind, user, kepala):
+    a = find(kind, user)
+    if not a:
+        return
+    send(chat, jual_butiran(kind, user, a, kepala), jual_kb_telco(kind, user) if kind != "s" else None)
+
+
+def kedai_cb(chat, frm, data):
+    J = jual_load()
+    T = trial_load()
+    uid = frm["id"]
+    adm = uid in ADMINS
+    if uid in T["banned"] and not adm:
+        return
+    p = data.split(":")
+    k = p[0]
+    if k == "ky" and len(p) == 2:
+        if p[1] == "trial":
+            trial_start(chat, frm)
+        elif not jual_hidup(J):
+            send(chat, "Jualan tak dibuka sekarang.")
+        elif p[1] == "beli":
+            send(chat, "Pilih jenis akaun (%s / %d hari):" % (rm(J["sen"]), J["hari"]),
+                 rows([btn(TRIAL_KIND[x], "kb:%s" % x) for x in J["jenis"]], 2))
+        elif p[1] == "renew":
+            L = jual_miliknya(J, uid)
+            if not L:
+                send(chat, "Kau belum ada akaun beli kat sini (atau dah dipadam). Tekan Beli akaun.")
+            else:
+                send(chat, "Renew akaun mana? (+%d hari, %s)" % (J["hari"], rm(J["sen"])),
+                     rows([btn("%s %s (%dh)" % (TRIAL_KIND[kk], u, days_left(a[1])), "kr:%s:%s" % (kk, u)) for kk, u, a in L], 1))
+        elif p[1] == "akaun":
+            L = jual_miliknya(J, uid)
+            if not L:
+                send(chat, "Kau belum ada akaun beli kat sini.")
+            else:
+                send(chat, "Akaun kau:", rows([btn("%s %s (%d hari)" % (TRIAL_KIND[kk], u, days_left(a[1])), "ka:%s:%s" % (kk, u)) for kk, u, a in L], 1))
+    elif k == "kb" and len(p) == 2 and p[1] in TRIAL_KIND:
+        jual_order_baru(chat, frm, p[1], "baru")
+    elif k == "kr" and len(p) == 3 and p[1] in TRIAL_KIND:
+        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+            return
+        if not find(p[1], p[2]):
+            send(chat, "Akaun tu dah dipadam. Tekan Beli akaun untuk beli baru.")
+            return
+        jual_order_baru(chat, frm, p[1], "renew", p[2])
+    elif k == "ka" and len(p) == 3 and p[1] in TRIAL_KIND:
+        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+            return
+        if not find(p[1], p[2]):
+            send(chat, "Akaun tu dah dipadam.")
+            return
+        jual_hantar_akaun(chat, p[1], p[2], "Akaun %s")
+    elif k == "kt" and len(p) == 4 and p[1] in KIND and p[3].isdigit():
+        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+            return
+        a = find(p[1], p[2])
+        if not a:
+            send(chat, "Akaun tu dah dipadam.")
+            return
+        T2 = telcos()
+        n = int(p[3])
+        sel = T2 if n == 0 else T2[n - 1:n]
+        if not sel:
+            send(chat, "Telco tak ada.")
+            return
+        out = ["<b>Akaun %s</b>" % KIND[p[1]]["nama"]] + [l for l in acct_info(p[1], p[2], a[2], a[1]) if not l.startswith("Nota")] + ["", "<b>Link telco</b>", ""]
+        for t in sel:
+            out += ["<b>%s</b>" % E(t[0]), code(telco_link(a[2], p[2], t, p[1])), ""]
+        send(chat, "\n".join(out).rstrip(), jual_kb_telco(p[1], p[2]))
+    elif k == "kx" and len(p) == 2:
+        o = jual_cari(J, p[1])
+        if not o or o["uid"] != uid or o["status"] not in ("menunggu_bayar", "menunggu_sah"):
+            return
+        if o["status"] == "menunggu_sah":
+            send(chat, "Resit order %s dah dihantar kat admin, tak boleh dibatalkan sekarang. Hubungi admin." % code(o["id"]))
+            return
+        o["status"] = "batal"
+        jual_save(J)
+        send(chat, "Order %s dibatalkan." % code(o["id"]), [[btn("🛒 Beli akaun", "ky:beli")]])
+
+
+def kedai_media(msg):
+    """Gambar atau fail daripada mesej bukan teks: (1) admin hantar QR dengan kapsyen /setqr, (2) pelanggan hantar resit."""
+    chat = msg["chat"]["id"]
+    uid = msg["from"]["id"]
+    cap = (msg.get("caption") or "").strip()
+    if uid in ADMINS:
+        if cap.split("@")[0].lower() == "/setqr" and msg.get("photo"):
+            J = jual_load()
+            J["qr"] = msg["photo"][-1]["file_id"]
+            jual_save(J)
+            send(chat, "QR bayaran disimpan. Taip /jualon untuk buka jualan, /jual untuk lihat tetapan.", MAIN_KB)
+        return
+    J = jual_load()
+    if not jual_hidup(J) or uid in trial_load()["banned"]:
+        return
+    ok_media = bool(msg.get("photo")) or (msg.get("document") or {}).get("mime_type", "").startswith(("image/", "application/pdf"))
+    if not ok_media:
+        return
+    o = jual_buka(J, uid)
+    if not o:
+        send(chat, "Tiada order. Tekan /start dan pilih Beli akaun dulu.")
+        return
+    if o["resit"] >= 3:
+        send(chat, "Resit dah dihantar kat admin. Tunggu pengesahan.")
+        return
+    o["resit"] += 1
+    o["status"] = "menunggu_sah"
+    jual_save(J)
+    adm_cap = "\n".join(["🧾 <b>Resit order %s</b>" % code(o["id"]),
+                         "Pelanggan: %s (tg:%d)" % (E(o["nama"]), uid),
+                         ("Beli %s %d hari" % (TRIAL_KIND[o["kind"]], o["hari"])) if o["jenis"] == "baru" else
+                         ("Renew %s %s +%d hari" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"])),
+                         "Jumlah: <b>%s</b>" % rm(o["sen"]), "",
+                         "⚠️ Semak duit dah masuk dalam bank dulu, baru tekan Sahkan."])
+    akb = [[btn("✅ Sahkan", "ok:%s" % o["id"]), btn("❌ Tolak", "no:%s" % o["id"])]]
+    for a in ADMINS:
+        try:
+            tg("copyMessage", chat_id=a, from_chat_id=chat, message_id=msg["message_id"], caption=adm_cap[:1000],
+               parse_mode="HTML", reply_markup={"inline_keyboard": akb})
+        except Exception as e:
+            log("copyMessage gagal:", e)
+            send(a, adm_cap + "\n(resit tak dapat disalin, minta pelanggan hantar semula atau semak bank)", akb)
+    send(chat, "✅ Resit diterima untuk order %s. Admin akan semak duit masuk dan akaun dihantar kat sini." % code(o["id"]))
+
+
+def jual_sahkan(oid, adm_chat):
+    J = jual_load()
+    o = jual_cari(J, oid)
+    if not o:
+        send(adm_chat, "Order %s tak jumpa." % code(oid))
+        return
+    if o["status"] not in ("menunggu_bayar", "menunggu_sah"):
+        send(adm_chat, "Order %s dah diproses (%s)." % (code(oid), E(o["status"])))
+        return
+    kind = o["kind"]
+    if o["jenis"] == "renew":
+        u = o["user"]
+        if J["akaun"].get("%s:%s" % (kind, u)) != o["uid"] or not find(kind, u):
+            send(adm_chat, "⚠️ Akaun %s dah tak ada atau bukan milik pelanggan. Order %s tak diproses." % (code(u), code(oid)))
+            return
+        if kind == "s":
+            exp, err = ssh_renew(u, o["hari"])
+        else:
+            exp, err = xray_renew(kind, u, o["hari"])
+        if not exp:
+            send(adm_chat, "⚠️ Renew gagal: %s. Order %s kekal, cuba tekan Sahkan lagi." % (E(err), code(oid)))
+            return
+        o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), u
+        jual_save(J)
+        jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s")
+        send(adm_chat, "✅ Order %s disahkan: renew %s %s +%d hari." % (code(oid), TRIAL_KIND[kind], code(u), o["hari"]), MAIN_KB)
+        return
+    frm = {"id": o["uid"], "first_name": o.get("fn", ""), "username": o.get("tg", "")}
+    user = jual_nama(frm, kind)
+    if not user:
+        send(adm_chat, "⚠️ Tak dapat cipta nama akaun. Order %s kekal." % code(oid))
+        return
+    nota = "Beli tg:%d order %s %s" % (o["uid"], oid, rm(o["sen"]))
+    if kind == "s":
+        pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+        r, err = ssh_create(user, pw, o["hari"], J["iplimit"], J["kuota"])
+    else:
+        r, err = xray_create(kind, user, o["hari"], J["iplimit"], J["kuota"], nota=nota)
+    if not r:
+        send(adm_chat, "⚠️ Gagal cipta akaun: %s. Order %s kekal, cuba tekan Sahkan lagi." % (E(err), code(oid)))
+        return
+    J["akaun"]["%s:%s" % (kind, user)] = o["uid"]
+    o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), user
+    jual_save(J)
+    jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap")
+    send(adm_chat, "✅ Order %s disahkan: %s %s dicipta untuk %s." % (code(oid), TRIAL_KIND[kind], code(user), E(o["nama"])), MAIN_KB)
+
+
+def jual_tolak(oid, adm_chat):
+    J = jual_load()
+    o = jual_cari(J, oid)
+    if not o:
+        send(adm_chat, "Order %s tak jumpa." % code(oid))
+        return
+    if o["status"] not in ("menunggu_bayar", "menunggu_sah"):
+        send(adm_chat, "Order %s dah diproses (%s)." % (code(oid), E(o["status"])))
+        return
+    o["status"] = "tolak"
+    jual_save(J)
+    send(o["chat"], "Pembayaran order %s tak dapat disahkan. Kalau kau dah bayar, hubungi admin dengan resit." % code(oid))
+    send(adm_chat, "❌ Order %s ditolak." % code(oid), MAIN_KB)
+
+
+def jual_sweep():
+    """Batalkan order belum bayar yang dah lama (tiada resit)."""
+    J = jual_load()
+    now = time.time()
+    ubah = False
+    for o in J["orders"]:
+        if o["status"] == "menunggu_bayar" and now - o["t"] > J["luput"] * 3600:
+            o["status"] = "batal"
+            ubah = True
+            send(o["chat"], "Order %s dibatalkan sebab tak dibayar dalam %d jam. Tekan /start untuk order semula." % (code(o["id"]), J["luput"]))
+    if ubah:
+        jual_save(J)
+
+
+def jual_admin_msg():
+    J = jual_load()
+    now = time.time()
+    hari, bulan = today().isoformat(), today().isoformat()[:7]
+    siap = [o for o in J["orders"] if o["status"] == "siap"]
+    tarikh = lambda o: datetime.date.fromtimestamp(o.get("siap_t", 0)).isoformat()
+    h = [o for o in siap if tarikh(o) == hari]
+    b = [o for o in siap if tarikh(o).startswith(bulan)]
+    L = ["🛒 <b>Jualan</b>  ✦ kancil ecem", "Status  : %s" % ("HIDUP" if jual_hidup(J) else ("TUTUP" if not J["aktif"] else "TUTUP (belum ada QR)")),
+         "Harga   : %s / %d hari" % (rm(J["sen"]), J["hari"]),
+         "Akaun   : kuota %s, %s peranti" % (trial_gb(J["kuota"]), J["iplimit"] or "tiada had"),
+         "Jenis   : %s" % (", ".join(TRIAL_KIND[k] for k in J["jenis"]) or "tiada"),
+         "QR bank : %s" % ("ada" if J["qr"] else "BELUM (hantar gambar QR dengan kapsyen /setqr)"),
+         "Order batal automatik: %d jam tak bayar" % J["luput"],
+         "Hari ni : %d jualan, %s" % (len(h), rm(sum(o["sen"] for o in h))),
+         "Bulan ni: %d jualan, %s" % (len(b), rm(sum(o["sen"] for o in b))),
+         "Akaun dijual masih ada: %d" % len(J["akaun"]), ""]
+    op = [o for o in J["orders"] if o["status"] in ("menunggu_bayar", "menunggu_sah")]
+    L.append("Order terbuka: %d" % len(op))
+    for o in op:
+        L.append(" %s  %s  %s  %s  (%s, %s)" % (code(o["id"]), E(o["nama"]), TRIAL_KIND[o["kind"]], rm(o["sen"]),
+                                                 "resit diterima" if o["status"] == "menunggu_sah" else "belum bayar", trial_tempoh(now - o["t"])))
+    L += ["", "/jualon  /jualoff  /order",
+          "/jualset harga=10 hari=30 kuota=0 ip=2 jenis=v,m,t,s luput=24",
+          "/jualnota teks (arahan tambahan kat skrin bayar, 0 = padam)",
+          "/sahkan KOD  /tolak KOD (kalau butang hilang)",
+          "QR: hantar gambar QR bank dengan kapsyen /setqr"]
+    return "\n".join(L)
+
+
+def jual_cmd(chat, cmd, a):
+    J = jual_load()
+    if cmd == "/jual":
+        send(chat, jual_admin_msg(), MAIN_KB)
+    elif cmd == "/jualon":
+        if not J["qr"]:
+            send(chat, "Hantar dulu gambar QR bank kau kat bot ni dengan kapsyen /setqr.")
+            return
+        if not J["jenis"]:
+            send(chat, "Tiada jenis akaun. Guna /jualset jenis=v,m,t,s")
+            return
+        J["aktif"] = True
+        jual_save(J)
+        send(chat, "Jualan HIDUP.\n\n" + jual_admin_msg(), MAIN_KB)
+    elif cmd == "/jualoff":
+        J["aktif"] = False
+        jual_save(J)
+        send(chat, "Jualan TUTUP. Order yang dah ada resit masih boleh disahkan.", MAIN_KB)
+    elif cmd == "/jualset":
+        if not a:
+            send(chat, "Guna: /jualset harga=10 hari=30 kuota=0 ip=2 jenis=v,m,t,s luput=24  (harga dalam RM, kuota 0 = tiada had)")
+            return
+        for tok in a:
+            if "=" not in tok:
+                send(chat, "Tak sah: %s. Guna bentuk nama=nilai." % code(tok))
+                return
+            k, v = tok.split("=", 1)
+            k = k.lower()
+            if k == "harga":
+                if not RM_RE.match(v) or float(v) < 1:
+                    send(chat, "harga mesti nombor RM 1 hingga 9999 (contoh 10 atau 12.50).")
+                    return
+                J["sen"] = int(round(float(v) * 100))
+            elif k in JUAL_RANGE:
+                lo, hi = JUAL_RANGE[k]
+                if not v.isdigit() or not lo <= int(v) <= hi:
+                    send(chat, "%s mesti nombor %d hingga %d." % (code(k), lo, hi))
+                    return
+                J["iplimit" if k == "ip" else k] = int(v)
+            elif k == "jenis":
+                js = [x for x in v.lower().split(",") if x]
+                if not js or any(x not in TRIAL_KIND for x in js):
+                    send(chat, "jenis: guna huruf v m t s dipisah koma. Contoh jenis=v,m")
+                    return
+                J["jenis"] = [x for x in "vmts" if x in js]
+            else:
+                send(chat, "Tak dikenali: %s" % code(k))
+                return
+        jual_save(J)
+        send(chat, "Disimpan.\n\n" + jual_admin_msg(), MAIN_KB)
+    elif cmd == "/jualnota":
+        t = " ".join(a).strip()
+        if not t:
+            send(chat, "Guna: /jualnota teks  (0 = padam). Nota sekarang: %s" % (E(J["nota"]) or "tiada"))
+            return
+        if t == "0":
+            J["nota"] = ""
+        elif len(t) > 300:
+            send(chat, "Nota terlalu panjang (maksimum 300 aksara).")
+            return
+        else:
+            J["nota"] = t
+        jual_save(J)
+        send(chat, "Nota disimpan." if J["nota"] else "Nota dipadam.", MAIN_KB)
+    elif cmd == "/order":
+        op = [o for o in J["orders"] if o["status"] in ("menunggu_bayar", "menunggu_sah")]
+        if not op:
+            send(chat, "Tiada order terbuka.", MAIN_KB)
+            return
+        for o in op:
+            send(chat, "%s  %s  %s %s  %s  (%s)" % (code(o["id"]), E(o["nama"]), TRIAL_KIND[o["kind"]], "renew" if o["jenis"] == "renew" else "baru",
+                                                     rm(o["sen"]), "resit diterima" if o["status"] == "menunggu_sah" else "belum bayar"),
+                 [[btn("✅ Sahkan", "ok:%s" % o["id"]), btn("❌ Tolak", "no:%s" % o["id"])]])
+    elif cmd in ("/sahkan", "/tolak"):
+        if len(a) != 1 or not re.match(r"^[A-Za-z0-9]{5}$", a[0]):
+            send(chat, "Guna: %s KOD  (kod order 5 aksara, contoh K7P2Q)" % cmd)
+            return
+        (jual_sahkan if cmd == "/sahkan" else jual_tolak)(a[0].upper(), chat)
+
+
 def handle(u):
     if "callback_query" in u:
         cq = u["callback_query"]
@@ -1517,11 +2060,17 @@ def handle(u):
         if data.startswith(("pt:", "pc:")):
             trial_cb(chat, cq["from"], data)
             return
+        if data.startswith(KEDAI_CB):
+            kedai_cb(chat, cq["from"], data)
+            return
         if cq["from"]["id"] not in ADMINS:
             return
         on_callback(chat, data)
         return
     msg = u.get("message")
+    if msg and "text" not in msg and ("photo" in msg or "document" in msg) and (msg.get("chat") or {}).get("type") == "private" and "from" in msg:
+        kedai_media(msg)
+        return
     if not msg or "text" not in msg:
         return
     chat = msg["chat"]["id"]
@@ -1530,8 +2079,8 @@ def handle(u):
     if msg["chat"].get("type") != "private":
         return
     if uid not in ADMINS:
-        if trial_load()["aktif"]:
-            trial_start(chat, msg["from"])
+        if kedai_aktif():
+            kedai_start(chat, msg["from"])
             return
         # senyap: orang asing tak dapat balasan langsung. Cuma catat sekali setiap ID dalam log.
         if uid not in SEEN:
@@ -1557,6 +2106,10 @@ def main():
             trial_sweep()
         except Exception:
             log("trial_sweep ralat:", traceback.format_exc())
+        try:
+            jual_sweep()
+        except Exception:
+            log("jual_sweep ralat:", traceback.format_exc())
         try:
             params = {"timeout": 30, "allowed_updates": ["message", "callback_query"]}
             if offset is not None:
