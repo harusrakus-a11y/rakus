@@ -8,10 +8,11 @@ S="$D/.telco.sent"
 
 header() {
 cat <<'EOT'
-# nama|alamat|host|path|port
+# nama|alamat|host|path|port[|jenis]
 # {domain} = domain VPS (ditukar automatik). Nama tanpa ruang, guna sengkang.
 # Jenis 1 (bug jadi subdomain): nama|BUG.{domain}|BUG|/vless|80
 # Jenis 2 (IP Cloudflare):      nama|IP.CF|{domain}|/vless|80
+# Jenis 3 (httpupgrade, path sebijik): nama|IP.CF|{domain}|PATH|80|httpupgrade
 EOT
 }
 
@@ -26,7 +27,7 @@ tonewow|172.66.169.187|{domain}|/vless|80
 EOT
 }
 
-RE='^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$'
+RE='^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|[^|]+\|[0-9]+(\|(ws|httpupgrade))?$'
 
 fetch() {
 local t
@@ -51,13 +52,14 @@ fi
 fi
 
 show() {
-local i=0 n a h p q
+local i=0 n a h p q ty
 echo ""
-while IFS='|' read -r n a h p q; do
+while IFS='|' read -r n a h p q ty; do
 i=$((i+1))
 echo " $i) $n"
 echo "     alamat: $a"
 echo "     host  : $h"
+[ -n "$ty" ] && echo "     jenis : $ty"
 done < "$F"
 echo ""
 }
@@ -118,7 +120,7 @@ echo "Jenis:"
 echo " 1) Bug jadi subdomain      (macam celcom, maxis-viu)"
 echo " 2) IP Cloudflare           (macam digi, yes, tonewow)"
 echo " 3) IP Cloudflare + bug     (macam maxis-cmgo)"
-echo " 4) Taip sendiri (alamat|host|path|port)"
+echo " 4) Taip sendiri (alamat|host|path|port atau alamat|host|path|port|httpupgrade)"
 read -rp "Pilih jenis [1-4]: " kind
 case $kind in
 1) ask_bug || return
@@ -128,7 +130,7 @@ line="$nm|$IP|{domain}|/vless|80" ;;
 3) ask_ip || return
 ask_bug || return
 line="$nm|$IP|$BUG.{domain}|/vless|80" ;;
-4) read -rp "alamat|host|path|port : " rest
+4) read -rp "alamat|host|path|port[|httpupgrade] : " rest
 line="$nm|$rest" ;;
 *) echo "Pilihan tak sah."
 return ;;

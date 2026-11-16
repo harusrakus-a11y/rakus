@@ -16,6 +16,7 @@ import sys
 import time
 import traceback
 import unicodedata
+import urllib.parse
 import urllib.request
 import uuid as uuidlib
 
@@ -38,7 +39,7 @@ maxis-cmgo|104.16.160.145|cfcdn.viu.com.{domain}|/vless|80
 yes|104.17.147.22|{domain}|/vless|80
 tonewow|172.66.169.187|{domain}|/vless|80
 """
-TELCO_RE = re.compile(r"^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$")
+TELCO_RE = re.compile(r"^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|[^|]+\|[0-9]+(\|(ws|httpupgrade))?$")
 NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,30}$")
 PW_RE = re.compile(r"^[A-Za-z0-9._@#%+=!-]{4,32}$")
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -309,8 +310,8 @@ def telcos():
     for l in lines_of("/etc/xray/telco.conf"):
         l = l.strip()
         if TELCO_RE.match(l):
-            n, a, h, p, port = l.split("|")
-            out.append((n, a, h, p, port))
+            f = l.split("|")
+            out.append((f[0], f[1], f[2], f[3], f[4], f[5] if len(f) > 5 else "ws"))
     return out
 
 
@@ -321,20 +322,24 @@ def telco_path(kind, p):
 
 
 def telco_link(uid, user, t, kind="v"):
-    n, a, h, p, port = t
+    n, a, h, p, port = t[:5]
+    ty = t[5] if len(t) > 5 else "ws"
     d = domain()
     a = a.replace("{domain}", d)
     h = h.replace("{domain}", d)
     p = telco_path(kind, p)
     if kind == "m":
-        js = json.dumps({"v": "2", "ps": "%s-%s" % (user, n), "add": a, "port": port, "id": uid, "aid": "0", "net": "ws",
+        js = json.dumps({"v": "2", "ps": "%s-%s" % (user, n), "add": a, "port": port, "id": uid, "aid": "0", "net": ty,
                          "path": p, "type": "none", "host": h, "tls": "none"}, separators=(",", ":"))
         return "vmess://" + base64.b64encode(js.encode()).decode()
     if kind == "t":
-        return "trojan://%s@%s:%s?path=%s&security=none&host=%s&type=ws#%s-%s" % (
-            uid, a, port, p.replace("/", "%2F"), h, user, n)
+        return "trojan://%s@%s:%s?path=%s&security=none&host=%s&type=%s#%s-%s" % (
+            uid, a, port, urllib.parse.quote(p, safe=""), h, ty, user, n)
+    if ty != "ws":
+        return "vless://%s@%s:%s?path=%s&security=none&encryption=none&host=%s&type=%s#%s-%s" % (
+            uid, a, port, urllib.parse.quote(p, safe=""), h, ty, user, n)
     return "vless://%s@%s:%s?encryption=none&type=ws&host=%s&headerType=none&path=%s#%s-%s" % (
-        uid, a, port, h, p.replace("/", "%2F"), user, n)
+        uid, a, port, h, urllib.parse.quote(p, safe=""), user, n)
 
 
 TACT = {"v": "t", "m": "tm", "t": "tt"}

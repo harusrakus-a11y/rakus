@@ -191,7 +191,7 @@ telco_conf=/etc/xray/telco.conf
 telco_url=https://raw.githubusercontent.com/harusrakus-a11y/rakus/refs/heads/main/menu/telco.conf
 telco_init() {
 rm -f /tmp/telco.new
-if wget -q -T 8 -t 1 -O /tmp/telco.new "$telco_url" 2>/dev/null && grep -Eq '^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|/[^|]*\|[0-9]+$' /tmp/telco.new; then
+if wget -q -T 8 -t 1 -O /tmp/telco.new "$telco_url" 2>/dev/null && grep -Eq '^[A-Za-z0-9_-]+\|[^|]+\|[^|]+\|[^|]+\|[0-9]+(\|[a-z]+)?$' /tmp/telco.new; then
 cp /tmp/telco.new $telco_conf
 fi
 rm -f /tmp/telco.new
@@ -206,18 +206,34 @@ yes|104.17.147.22|{domain}|/vless|80
 tonewow|172.66.169.187|{domain}|/vless|80
 EOT
 }
+urlenc() {
+local LC_ALL=C s=$1 o= c h i
+for ((i=0;i<${#s};i++)); do
+c=${s:i:1}
+case $c in
+[a-zA-Z0-9.~_-]) o+=$c ;;
+*) printf -v h '%%%02X' "'$c"; o+=$h ;;
+esac
+done
+printf '%s' "$o"
+}
 telco_links() {
-local u=$1 nm=$2 sel=$3 n=0 name addr host pth port
+local u=$1 nm=$2 sel=$3 n=0 name addr host pth port typ
 [ -z "$sel" ] && return
-while IFS='|' read -r name addr host pth port; do
+while IFS='|' read -r name addr host pth port typ; do
 [[ -z $name || $name == \#* ]] && continue
+typ=${typ:-ws}
 n=$((n+1))
 if [[ $sel != 0 && $sel != $n ]]; then continue; fi
 addr=${addr//\{domain\}/$domain}
 host=${host//\{domain\}/$domain}
 pth=${pth:-/vless}
 port=${port:-80}
-echo "${name}|vless://${u}@${addr}:${port}?encryption=none&type=ws&host=${host}&headerType=none&path=${pth//\//%2F}#${nm}-${name}"
+if [[ $typ == ws ]]; then
+echo "${name}|vless://${u}@${addr}:${port}?encryption=none&type=ws&host=${host}&headerType=none&path=$(urlenc "$pth")#${nm}-${name}"
+else
+echo "${name}|vless://${u}@${addr}:${port}?path=$(urlenc "$pth")&security=none&encryption=none&host=${host}&type=${typ}#${nm}-${name}"
+fi
 done < $telco_conf
 }
 function add-vless(){
