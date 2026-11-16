@@ -1677,12 +1677,12 @@ def trial_start(chat, frm, vid=None):
     mine = [r for r in d["rec"] if r["uid"] == uid]
     if mine:
         r = mine[0]
-        send(chat, "Kau masih ada trial %s (%s). Tamat dalam %s." % (
+        send(chat, "Trial %s (%s) masih aktif. Tamat dalam %s." % (
             TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(r["tamat"] - now)) + trial_hubung(d))
         return
     w = 0 if adm else trial_tunggu(d, uid)
     if w > 0:
-        send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
+        send(chat, "Trial sudah digunakan. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
         return
     if not channel_ok(chat, frm, "trial"):
         return
@@ -1728,7 +1728,7 @@ def trial_cb(chat, frm, data):
         b = [btn(("" if telco_status(J, x[0]) == "ok" else TELCO_ST[telco_status(J, x[0])] + " ") + x[0], "pc:%s:%d%s" % (kind, i + 1, vtok(vid)))
              for i, x in enumerate(T) if telco_status(J, x[0]) != "tak" and telco_ok(x, kind)]
         kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0%s" % (kind, vtok(vid)))]]
-        send(chat, "Pilih telco kau:", kb)
+        send(chat, "Pilih telco:", kb)
     elif p[0] == "pc" and len(p) in (3, 4) and p[2].isdigit():
         trial_buat(chat, frm, kind, int(p[2]), vid)
 
@@ -1769,11 +1769,11 @@ def _trial_buat(chat, frm, kind, n, vid):
         send(chat, "Server tu tak dibuka sekarang. Taip /start untuk pilih semula.")
         return
     if any(r["uid"] == uid for r in d["rec"]):
-        send(chat, "Kau masih ada trial aktif." + trial_hubung(d))
+        send(chat, "Trial masih aktif." + trial_hubung(d))
         return
     w = 0 if adm else trial_tunggu(d, uid)
     if w > 0:
-        send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
+        send(chat, "Trial sudah digunakan. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
         return
     hari = today().isoformat()
     if d["hari"] != hari:
@@ -1981,7 +1981,7 @@ def trial_cmd(chat, cmd, a):
             return
         send(chat, "%d: jeda trial dikosongkan%s. Dia boleh minta trial baru." % (i, "" if ada else " (tiada rekod jeda sebelum ni)"), MAIN_KB)
         if d["aktif"]:
-            send(i, "🎁 Kau boleh minta trial lagi. Taip /start.")
+            send(i, "🎁 Boleh minta trial lagi. Taip /start.")
     elif cmd == "/trialuji":
         if not d["aktif"]:
             send(chat, "Trial masih TUTUP. Taip /trialon dulu.")
@@ -1990,7 +1990,7 @@ def trial_cmd(chat, cmd, a):
 
 
 # ---------------------------------------------------------------- KEDAI (jual akaun, bayar QR bank, admin sahkan)
-# Pelanggan: Beli / Renew / Akaun saya. Bayar guna QR bank admin, hantar resit kat bot. Resit sampai kat admin dengan butang
+# Pelanggan: Beli / Renew / Lihat akaun. Bayar guna QR bank admin, hantar resit kat bot. Resit sampai kat admin dengan butang
 # Sahkan / Tolak. Akaun dicipta (ikut nama Telegram pelanggan) hanya bila admin tekan Sahkan. QR bank biasa tak boleh
 # bagitahu bot duit dah masuk, jadi admin yang semak duit dalam bank dulu.
 # Tetapan dan rekod: /etc/tbot/jual.json (tiada UUID atau password disimpan di situ).
@@ -2061,7 +2061,7 @@ def telco_senarai_pelanggan(J, boleh_trial):
         L.append("Dikemas kini: %s" % datetime.datetime.fromtimestamp(J["telco_t"]).strftime("%d-%m-%Y %H:%M"))
     if any(telco_status(J, n) != "tak" for n in J.get("hc", {})):
         L += ["", "ℹ️ Telco bertanda <b>(SSH)</b>: pilih jenis <b>SSH</b>. Telco lain: pilih <b>VLESS</b>."]
-    L += ["", "Pilih telco kau masa beli." + (" Nak cuba dulu? Guna Trial percuma." if boleh_trial else "")]
+    L += ["", "Pilih telco semasa beli." + (" Nak cuba dulu? Guna Trial percuma." if boleh_trial else "")]
     return "\n".join(L)
 
 
@@ -2162,7 +2162,8 @@ def kedai_start(chat, frm):
             KEDAI_SENYAP.clear()
         KEDAI_SENYAP[uid] = now
     kb = [[btn("🛒 Beli akaun", "ky:beli"), btn("🔁 Renew", "ky:renew")],
-          [btn("📦 Akaun saya", "ky:akaun"), btn("📶 Telco berfungsi", "ky:telco")]]
+          [btn("📦 Lihat akaun", "ky:akaun"), btn("📶 Telco berfungsi", "ky:telco")],
+          [btn("⚡ Test speed server", "ky:speed")]]
     if T["aktif"] and T["jenis"]:
         kb.insert(0, [btn("🎁 Trial percuma", "ky:trial")])
     nota = hc_nota_jenis(J, None, J["jenis"])
@@ -2201,9 +2202,9 @@ def jual_order_baru(chat, frm, kind, jenis, user="", telco="", vid="local"):
     o = jual_buka(J, uid)
     if o:
         if o["status"] == "menunggu_sah":
-            send(chat, "Kau ada order %s yang tengah disemak admin. Tunggu sekejap." % code(o["id"]))
+            send(chat, "Order %s sedang disemak admin. Tunggu sekejap." % code(o["id"]))
         else:
-            send(chat, "Kau ada order yang belum bayar:")
+            send(chat, "Ada order yang belum dibayar:")
             jual_pay_screen(chat, o, J)
         return
     o = {"id": jual_order_id(J), "uid": uid, "chat": chat, "nama": tg_nama(frm), "tg": frm.get("username", ""),
@@ -2291,7 +2292,7 @@ def jual_pilih_telco(chat, J, kind, vid="local"):
         if s != "tak" and telco_ok(x, kind):
             b.append(btn("%s %s" % (TELCO_ST[s], x[0]), "kc:%s:%d%s" % (kind, i + 1, vtok(vid))))
     tk = [x[0] for x in T if telco_status(J, x[0]) == "tak" and telco_ok(x, kind)]
-    teks = ["Pilih telco kau dulu. ✅ berfungsi, ⚠️ kadang-kadang."]
+    teks = ["Pilih telco dulu. ✅ berfungsi, ⚠️ kadang-kadang."]
     if tk:
         teks.append("❌ Tak berfungsi sekarang (tak boleh dipilih): %s" % E(", ".join(tk)))
     teks += ["", "Lepas pilih, bot hantar QR bayaran."]
@@ -2317,6 +2318,8 @@ def kedai_cb(chat, frm, data):
     elif k == "ky" and len(p) == 2:
         if p[1] == "trial":
             trial_start(chat, frm)
+        elif p[1] == "speed":
+            kedai_speed(chat, frm)
         elif p[1] == "telco":
             send(chat, telco_senarai_pelanggan(J, T["aktif"] and bool(T["jenis"])),
                  [[btn("🛒 Beli akaun", "ky:beli")]] if jual_hidup(J) else None)
@@ -2329,16 +2332,16 @@ def kedai_cb(chat, frm, data):
         elif p[1] == "renew":
             L = jual_miliknya(J, uid)
             if not L:
-                send(chat, "Kau belum ada akaun beli kat sini (atau dah dipadam). Tekan Beli akaun.")
+                send(chat, "Belum ada akaun beli di sini (atau sudah dipadam). Tekan Beli akaun.")
             else:
                 send(chat, "Renew akaun mana? (+%d hari, %s)" % (J["hari"], rm(J["sen"])),
                      rows([btn("%s %s (%dh)%s" % (TRIAL_KIND[kk], u, days_left(a[1]), vlabel(vid)), "kr:%s:%s%s" % (kk, u, vsuf(vid))) for kk, u, a, vid in L], 1))
         elif p[1] == "akaun":
             L = jual_miliknya(J, uid)
             if not L:
-                send(chat, "Kau belum ada akaun beli kat sini.")
+                send(chat, "Belum ada akaun beli di sini.")
             else:
-                send(chat, "Akaun kau:", rows([btn("%s %s (%d hari)%s" % (TRIAL_KIND[kk], u, days_left(a[1]), vlabel(vid)), "ka:%s:%s%s" % (kk, u, vsuf(vid))) for kk, u, a, vid in L], 1))
+                send(chat, "Akaun:", rows([btn("%s %s (%d hari)%s" % (TRIAL_KIND[kk], u, days_left(a[1]), vlabel(vid)), "ka:%s:%s%s" % (kk, u, vsuf(vid))) for kk, u, a, vid in L], 1))
     elif k == "ks" and len(p) == 3 and p[1] in ("trial", "beli"):
         vid = p[2]
         if not vps_dibuka(vid):
@@ -2546,7 +2549,7 @@ def jual_sahkan(oid, adm_chat):
         try:
             jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s", vid=vid, fail=False)
         except VPSError as e:
-            send(adm_chat, "⚠️ Renew siap tapi butiran tak dapat dihantar kat pelanggan (%s). Dia boleh tekan Akaun saya." % E(e))
+            send(adm_chat, "⚠️ Renew siap tapi butiran tak dapat dihantar kat pelanggan (%s). Pelanggan boleh tekan Lihat akaun." % E(e))
         send(adm_chat, "✅ Order %s disahkan: renew %s %s +%d hari.%s" % (code(oid), TRIAL_KIND[kind], code(u), o["hari"], vtag(vid)), MAIN_KB)
         return
     frm = {"id": o["uid"], "first_name": o.get("fn", ""), "username": o.get("tg", "")}
@@ -2574,7 +2577,7 @@ def jual_sahkan(oid, adm_chat):
     try:
         jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap", o.get("telco", ""), vid=vid)
     except VPSError as e:
-        send(adm_chat, "⚠️ Akaun dicipta tapi butiran tak dapat dihantar kat pelanggan (%s). Dia boleh tekan Akaun saya." % E(e))
+        send(adm_chat, "⚠️ Akaun dicipta tapi butiran tak dapat dihantar kat pelanggan (%s). Pelanggan boleh tekan Lihat akaun." % E(e))
     send(adm_chat, "✅ Order %s disahkan: %s %s dicipta untuk %s.%s" % (code(oid), TRIAL_KIND[kind], code(user), E(o["nama"]), vtag(vid)), MAIN_KB)
 
 
@@ -2589,7 +2592,7 @@ def jual_tolak(oid, adm_chat):
         return
     o["status"] = "tolak"
     jual_save(J)
-    send(o["chat"], "Pembayaran order %s tak dapat disahkan. Kalau kau dah bayar, hubungi admin dengan resit." % code(oid))
+    send(o["chat"], "Pembayaran order %s tak dapat disahkan. Kalau sudah bayar, sila hubungi admin dengan resit." % code(oid))
     send(adm_chat, "❌ Order %s ditolak." % code(oid), MAIN_KB)
 
 
@@ -2680,7 +2683,7 @@ def jual_cmd(chat, cmd, a):
         send(chat, jual_admin_msg(), MAIN_KB)
     elif cmd == "/jualon":
         if not J["qr"]:
-            send(chat, "Hantar dulu gambar QR bank kau kat bot ni dengan kapsyen /setqr.")
+            send(chat, "Hantar dulu gambar QR bank ke bot ini dengan kapsyen /setqr.")
             return
         if not J["jenis"]:
             send(chat, "Tiada jenis akaun. Guna /jualset jenis=v,m,t,s")
@@ -2816,7 +2819,7 @@ def vps_list_msg(chat):
             L.append("   ❌ tak dapat dihubungi: %s" % E(err))
         if v["host"]:
             L.append("   %s%s" % (E(v["host"]), (":%d" % v["port"]) if v["port"] != 22 else ""))
-    L += ["", "▶ = server yang kau tengah urus (cipta, senarai, padam, renew guna server ni).",
+    L += ["", "▶ = server yang sedang diurus (cipta, senarai, padam, renew guna server ni).",
           "🔒 tutup = pelanggan tak nampak server tu untuk beli atau trial baru (akaun sedia ada dan renew jalan macam biasa).", "",
           "/vpspilih ID  - tukar server yang diurus", "/vpstambah  - tambah server baru", "/vpsbuang ID  - buang server",
           "/vpsnama ID nama  - tukar nama", "/vpstutup ID  /vpsbuka ID  - tutup atau buka untuk pelanggan baru"]
@@ -2855,7 +2858,7 @@ def vps_pilih(chat, vid):
     d["pilih"][str(chat)] = vid
     vps_save(d)
     STATE.pop(chat, None)
-    send(chat, "🖥 Sekarang kau urus server <b>%s</b>. Cipta, senarai, semak, padam dan renew akaun kat server ni." % E(v["nama"]), MAIN_KB)
+    send(chat, "🖥 Sekarang mengurus server <b>%s</b>. Cipta, senarai, semak, padam dan renew akaun kat server ni." % E(v["nama"]), MAIN_KB)
 
 
 def vps_tambah(chat, a):
@@ -2994,63 +2997,135 @@ def vps_buang(chat, a):
 # Skrip jalan terus kat server (curl ke Cloudflare). Tak pasang apa-apa, tak guna ejen tbot.py. Guna lebih kurang 120 MB data setiap server.
 SPEED_SH = r"""command -v curl >/dev/null 2>&1 || { echo NOCURL; exit 0; }
 c='curl -s -o /dev/null --max-time 10'
+m=$$
 echo "P $($c -w '%{time_connect}' https://speed.cloudflare.com/cdn-cgi/trace)"
-echo "D $($c -w '%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=100000000')"
+for u in "cloudflare|https://speed.cloudflare.com/__down?measId=$m&bytes=100000000" \
+         "cloudflare25|https://speed.cloudflare.com/__down?measId=$m&bytes=25000000" \
+         "cachefly|http://cachefly.cachefly.net/100mb.test" \
+         "ovh|https://proof.ovh.net/files/100Mb.dat"; do
+  n=${u%%|*}; l=${u#*|}
+  r=$($c -w '%{http_code} %{size_download} %{speed_download}' "$l")
+  echo "D $n $r"
+  set -- $r
+  [ "$1" = 200 ] && [ "${2%.*}" -ge 1000000 ] 2>/dev/null && break
+done
 f=/tmp/.tbspd.$$
 head -c 20000000 /dev/zero > "$f" 2>/dev/null
-echo "U $($c -X POST --data-binary @"$f" -w '%{speed_upload}' https://speed.cloudflare.com/__up)"
+echo "U $($c -X POST --data-binary @"$f" -w '%{http_code} %{size_upload} %{speed_upload}' "https://speed.cloudflare.com/__up?measId=$m")"
 rm -f "$f"
 """
+SPEED_TTL = 3600       # keputusan disimpan 1 jam: pelanggan tak boleh paksa ujian baru, jimat data server
 SPEED_LOCK = threading.Lock()
+SPEED_CACHE = {}       # id server -> {"t": masa, "p": ms, "d": Mbps turun, "u": Mbps naik, "e": ralat (kosong = berjaya)}
 SPEED_T = None
 
 
 def speed_parse(out):
-    r = {}
+    """Keluaran skrip -> {"P": saat, "D": [(sumber, kod, saiz, bait/saat)], "U": (kod, saiz, bait/saat) atau None}; None kalau tiada apa-apa."""
+    r = {"P": 0.0, "D": [], "U": None}
+    ada = False
     for l in (out or "").splitlines():
-        m = re.match(r"^([PDU]) ([0-9]+(?:\.[0-9]+)?)$", l.strip())
+        l = l.strip()
+        m = re.match(r"^P ([0-9]+(?:\.[0-9]+)?)$", l)
         if m:
-            r[m.group(1)] = float(m.group(2))
-    return r
+            r["P"], ada = float(m.group(1)), True
+        m = re.match(r"^D (\S+) (\d{3}) (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)$", l)
+        if m:
+            r["D"].append((m.group(1), int(m.group(2)), float(m.group(3)), float(m.group(4))))
+            ada = True
+        m = re.match(r"^U (\d{3}) (\d+(?:\.\d+)?) (\d+(?:\.\d+)?)$", l)
+        if m:
+            r["U"], ada = (int(m.group(1)), float(m.group(2)), float(m.group(3))), True
+    return r if ada else None
 
 
-def speed_baris(v, rc, out, err):
-    """Satu server -> dua baris laporan (HTML)."""
-    kepala = "🖥 <b>%s</b>  <code>%s</code>" % (E(v["nama"]), E(v["id"]))
+def speed_ukur(v):
+    """Uji satu server. Pulang {"t","p","d","u","e","dx","ux","sumber"}; e tak kosong = gagal semua (penerangan untuk admin sahaja).
+    Download dan upload dikira sah hanya kalau kod HTTP 2xx dan lebih 1 MB sampai (bukan halaman ralat)."""
+    h = {"t": time.time(), "p": 0, "d": 0, "u": 0, "e": "", "dx": "", "ux": "", "sumber": ""}
+    try:
+        if v["id"] == "local":
+            pr = subprocess.run(["sh", "-c", SPEED_SH], capture_output=True, timeout=90)
+            rc, out, err = pr.returncode, pr.stdout.decode("utf-8", "replace"), pr.stderr.decode("utf-8", "replace")
+        else:
+            rc, out, err = ssh_run(v, "sh -c " + shlex.quote(SPEED_SH), b"", 90)
+    except subprocess.TimeoutExpired:
+        h["e"] = "ujian terlalu lama (lebih 90 saat)"
+        return h
+    except VPSError as e:
+        h["e"] = str(e)
+        return h
+    except Exception as e:
+        log("speed gagal:", e)
+        h["e"] = "ralat: " + str(e)[:100]
+        return h
     if rc == 255:
-        return kepala + "\n   ❌ tak dapat sambung: " + E(_ralat_ssh(err))
-    if "NOCURL" in (out or ""):
-        return kepala + "\n   ❌ curl tak ada kat server ni (apt install -y curl)"
+        h["e"] = "tak dapat sambung: " + _ralat_ssh(err)
+        return h
+    if "NOCURL" in out:
+        h["e"] = "curl tak ada kat server ni (apt install -y curl)"
+        return h
     r = speed_parse(out)
     if not r:
-        return kepala + "\n   ❌ ujian gagal (kod %d): %s" % (rc, E(_ralat_ssh(err)))
-    ping, dl, ul = r.get("P", 0) * 1000, r.get("D", 0) * 8 / 1e6, r.get("U", 0) * 8 / 1e6
-    if not (ping or dl or ul):
-        return kepala + "\n   ❌ tak dapat capai speed.cloudflare.com (internet server bermasalah atau disekat)"
-    return kepala + "\n   Ping %s • ⬇ %s • ⬆ %s" % (
-        ("%d ms" % round(ping)) if ping else "gagal", ("%.1f Mbps" % dl) if dl else "gagal", ("%.1f Mbps" % ul) if ul else "gagal")
+        h["e"] = "ujian gagal (kod %d): %s" % (rc, _ralat_ssh(err))
+        return h
+    h["p"] = r["P"] * 1000
+    ok = next(((n, sp) for n, kod, sz, sp in r["D"] if kod == 200 and sz >= 1000000), None)
+    if ok:
+        h["sumber"], h["d"] = ok[0], ok[1] * 8 / 1e6
+    elif r["D"]:
+        h["dx"] = ", ".join("%s %s" % (n, ("HTTP %d" % kod) if kod else "tiada sambungan") for n, kod, sz, sp in r["D"])
+    if r["U"] and 200 <= r["U"][0] < 300 and r["U"][1] >= 1000000:
+        h["u"] = r["U"][2] * 8 / 1e6
+    elif r["U"]:
+        h["ux"] = ("HTTP %d" % r["U"][0]) if r["U"][0] else "tiada sambungan"
+    if not (h["p"] or h["d"] or h["u"]):
+        h["e"] = "tak dapat capai internet (speed.cloudflare.com dan sumber ganti gagal)"
+    return h
 
 
-def speed_kerja(chat, senarai):
+def speed_baris(v, h, adm):
+    """Satu server -> kepala + baris keputusan (HTML). Pelanggan tak nampak ID server atau punca ralat."""
+    kepala = "🖥 <b>%s</b>" % E(v["nama"]) + (("  <code>%s</code>" % E(v["id"])) if adm else "")
+    if h["e"]:
+        return kepala + "\n   ❌ " + (E(h["e"]) if adm else "tak dapat diuji sekarang")
+    t = kepala + "\n   Ping %s • ⬇ %s • ⬆ %s" % (
+        ("%d ms" % round(h["p"])) if h["p"] else "gagal", ("%.1f Mbps" % h["d"]) if h["d"] else "gagal",
+        ("%.1f Mbps" % h["u"]) if h["u"] else "gagal")
+    if adm:
+        if h.get("dx"):
+            t += "\n   ⬇ gagal: " + E(h["dx"])
+        elif h.get("sumber") and h["sumber"] != "cloudflare":
+            t += "\n   (download guna sumber ganti: %s)" % E(h["sumber"])
+        if h.get("ux"):
+            t += "\n   ⬆ gagal: " + E(h["ux"])
+    return t
+
+
+def speed_umur(t):
+    m = int((time.time() - t) // 60)
+    return "baru sekejap tadi" if m < 1 else "%d minit lalu" % m
+
+
+def speed_laporan(S, adm):
+    L = ["⚡ <b>%s</b>" % ("Uji kelajuan server" if adm else "Kelajuan server"), ""]
+    for v in S:
+        L.append(speed_baris(v, SPEED_CACHE[v["id"]], adm))
+    if adm:
+        L += ["", "Ini kelajuan server ke internet, bukan kelajuan dari telefon. Setiap server guna lebih kurang 120 MB data."]
+    else:
+        L += ["", "Diuji %s. Keputusan disimpan 1 jam." % speed_umur(min(SPEED_CACHE[v["id"]]["t"] for v in S)),
+              "Ini kelajuan server ke internet, bukan kelajuan dari telefon. Kelajuan sebenar bergantung pada telco dan liputan."]
+    return "\n".join(L)
+
+
+def speed_kerja(chat, adm, senarai, kb=None):
     try:
-        L = ["⚡ <b>Uji kelajuan server</b>", ""]
         for v in senarai:
-            try:
-                if v["id"] == "local":
-                    p = subprocess.run(["sh", "-c", SPEED_SH], capture_output=True, timeout=60)
-                    rc, out, err = p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
-                else:
-                    rc, out, err = ssh_run(v, "sh -c " + shlex.quote(SPEED_SH), b"", 60)
-                L.append(speed_baris(v, rc, out, err))
-            except subprocess.TimeoutExpired:
-                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ ujian terlalu lama (lebih 60 saat)" % (E(v["nama"]), E(v["id"])))
-            except VPSError as e:
-                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ %s" % (E(v["nama"]), E(v["id"]), E(str(e))))
-            except Exception as e:
-                log("speed gagal:", e)
-                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ ralat: %s" % (E(v["nama"]), E(v["id"]), E(str(e)[:100])))
-        L += ["", "Ini kelajuan server ke internet (Cloudflare), bukan kelajuan dari telefon kau. Setiap server guna lebih kurang 120 MB data."]
-        send(chat, "\n".join(L))
+            SPEED_CACHE[v["id"]] = speed_ukur(v)
+        S = senarai if adm else [v for v in vps_semua() if v["buka"] and v["id"] in SPEED_CACHE]
+        if S:
+            send(chat, speed_laporan(S, adm), kb)
     except Exception as e:
         log("speed gagal:", e)
     finally:
@@ -3058,7 +3133,7 @@ def speed_kerja(chat, senarai):
 
 
 def speed_cmd(chat, a):
-    """/speed [ID]  uji ping, download, upload setiap server (atau satu server)."""
+    """Admin: /speed [ID]  uji ping, download, upload setiap server (atau satu server) sekarang juga. Keputusan masuk simpanan pelanggan."""
     global SPEED_T
     S = vps_semua()
     if a:
@@ -3070,7 +3145,35 @@ def speed_cmd(chat, a):
         send(chat, "Ujian kelajuan lain tengah jalan. Tunggu sekejap.")
         return
     send(chat, "⏳ Uji kelajuan %d server, ambil lebih kurang %d saat. Sekejap..." % (len(S), 35 * len(S)))
-    SPEED_T = threading.Thread(target=speed_kerja, args=(chat, S), daemon=True)
+    SPEED_T = threading.Thread(target=speed_kerja, args=(chat, True, S), daemon=True)
+    SPEED_T.start()
+
+
+def kedai_speed(chat, frm):
+    """Pelanggan: /speed atau butang Test speed. Papar keputusan simpanan (server dibuka sahaja); ujian baru cuma kalau lebih sejam."""
+    global SPEED_T
+    uid = frm["id"]
+    if uid in trial_load()["banned"] and uid not in ADMINS:
+        return
+    now = time.time()
+    if uid not in ADMINS:
+        if now - KEDAI_SENYAP.get(("sp", uid), 0) < 3:
+            return
+        KEDAI_SENYAP[("sp", uid)] = now
+    S = [v for v in vps_semua() if v["buka"]]
+    if not S:
+        send(chat, "Tiada server dibuka sekarang.")
+        return
+    kb = [[btn("🛒 Beli akaun", "ky:beli")]] if jual_hidup(jual_load()) else None
+    basi = [v for v in S if now - SPEED_CACHE.get(v["id"], {}).get("t", 0) > SPEED_TTL]
+    if not basi:
+        send(chat, speed_laporan(S, False), kb)
+        return
+    if not SPEED_LOCK.acquire(blocking=False):
+        send(chat, "Tengah uji kelajuan server. Cuba lagi sekejap lagi.")
+        return
+    send(chat, "⏳ Tengah uji kelajuan server, ambil lebih kurang %d saat. Sekejap..." % (35 * len(basi)))
+    SPEED_T = threading.Thread(target=speed_kerja, args=(chat, False, basi, kb), daemon=True)
     SPEED_T.start()
 
 
@@ -3155,8 +3258,8 @@ def vps_pilih_awam(chat, nxt):
 
 
 # ---------------------------------------------------------------- wajib join channel
-# Pelanggan kena jadi ahli channel kau sebelum boleh Trial atau Beli. Bot mesti jadi admin channel tu (supaya boleh semak ahli).
-# Admin tak disekat. Renew, Akaun saya dan Telco berfungsi tak disekat. Kalau semakan gagal (bot bukan admin lagi dll), semua orang dibenarkan dan admin dimaklumkan.
+# Pelanggan kena jadi ahli channel admin sebelum boleh Trial atau Beli. Bot mesti jadi admin channel tu (supaya boleh semak ahli).
+# Admin tak disekat. Renew, Lihat akaun dan Telco berfungsi tak disekat. Kalau semakan gagal (bot bukan admin lagi dll), semua orang dibenarkan dan admin dimaklumkan.
 # ---------------------------------------------------------------- HTTP Custom (.hc) berkunci
 # Admin buat fail .hc berkunci dalam app HTTP Custom (payload tersembunyi, bahagian Account dibiar boleh diedit),
 # lepas tu hantar kat bot dengan kapsyen  /hcset nama [server]. Bot simpan fail sebijik (TAK dibuka, TAK diubah) dan hantar kat
@@ -3262,7 +3365,7 @@ def hc_lepas(chat, user, vid):
         hc_hantar(chat, H[0], vid)
     elif H:
         tok = user + vsuf(vid)
-        send(chat, "📱 Pilih telco untuk fail HTTP Custom (akaun SSH kau):",
+        send(chat, "📱 Pilih telco untuk fail HTTP Custom (akaun SSH):",
              rows([btn(("" if telco_status(J, n) == "ok" else TELCO_ST[telco_status(J, n)] + " ") + hc_tajuk(J, n), "kh:%s:%s" % (n, tok)) for n in H], 2))
 
 
@@ -3290,7 +3393,7 @@ def hc_buang_vps(J, vid):
 HC_LAST = {}
 HC_FOTO = {}
 HC_NOTA_LALAI = ("Cara guna fail HTTP Custom:\n1. Buka fail .hc tadi dengan HTTP Custom.\n"
-                 "2. Isi SSH username dan password (ada dalam mesej akaun kau).\n3. Tekan Start.\nJangan kongsi fail ni.")
+                 "2. Isi SSH username dan password (ada dalam mesej akaun).\n3. Tekan Start.\nJangan kongsi fail ni.")
 
 
 def hc_panduan(chat):
@@ -3369,7 +3472,7 @@ def hc_set(chat, cap, doc):
     w = baris[0].split()[1:]
     if not w or not HC_NAMA.match(w[0].lower()):
         send(chat, "Guna: hantar fail .hc dengan kapsyen  /hcset nama [server]\nNama: huruf kecil, nombor, sengkang (2-20 aksara), contoh celcom-sg.\n"
-                   "Server: ID dari /vps (contoh v2). Kalau kosong, guna server yang tengah kau pilih.\n"
+                   "Server: ID dari /vps (contoh v2). Kalau kosong, guna server yang sedang dipilih.\n"
                    "Nama telco untuk pelanggan (pilihan): tulis selepas server, asing dengan koma atau baris baru.")
         return
     nama = w[0].lower()
@@ -3470,7 +3573,7 @@ def hc_cmd(chat, cmd, a):
               "Hantar fail .hc tu kat bot ni (klip kertas > File), lepas tu taip  /hcset nama [server]  (boleh juga letak arahan ni sebagai kapsyen fail)",
               "/hcnama nama Nama satu, Nama dua - nama telco yang pelanggan nampak (0 = buang)",
               "/hcnota teks - nota cara guna (0 = lalai).  /hcgambar - gambar panduan (hantar gambar dulu, lepas tu taip arahan; 0 = buang)",
-              "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang tengah kau pilih.",
+              "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang sedang dipilih.",
               "/hcfail nama [server] - bot hantar fail tu balik untuk uji", "/hcpadam nama [server] - buang", "/telcotak nama - sorok sementara dari pelanggan"]
         send(chat, "\n".join(L), MAIN_KB)
         return
@@ -3554,7 +3657,7 @@ def channel_ok(chat, frm, what, ulang=False):
             CHAN_OK.clear()
         CHAN_OK[uid] = time.time() + 600
         return True
-    send(chat, ("Belum nampak kau dalam channel lagi. " if ulang else "") +
+    send(chat, ("Belum dikesan dalam channel lagi. " if ulang else "") +
          "📢 Untuk guna %s, join channel <b>%s</b> dulu. Lepas join, tekan ✅ Dah join." % ("Trial" if what == "trial" else "Beli akaun", E(c.get("nama") or c["id"])),
          [[{"text": "📢 Join channel", "url": c["link"]}], [btn("✅ Dah join", "kj:%s" % what)]])
     return False
@@ -3566,10 +3669,10 @@ def chan_cmd(chat, a):
     guna = "Guna: /channel @namachannel   (channel awam)\n/channel -100123456789 https://t.me/+pautan   (channel peribadi)\n/channel 0   (matikan)"
     if not a:
         if c.get("id"):
-            send(chat, "📢 Wajib join channel: <b>HIDUP</b>\nChannel: %s (%s)\nPautan: %s\n\nSekat: Trial dan Beli akaun. Tak disekat: Renew, Akaun saya, Telco berfungsi, admin.\n\n%s" % (
+            send(chat, "📢 Wajib join channel: <b>HIDUP</b>\nChannel: %s (%s)\nPautan: %s\n\nSekat: Trial dan Beli akaun. Tak disekat: Renew, Lihat akaun, Telco berfungsi, admin.\n\n%s" % (
                 E(c.get("nama", "")), E(c["id"]), E(c["link"]), guna), MAIN_KB)
         else:
-            send(chat, "📢 Wajib join channel: <b>MATI</b>\n\nCara hidupkan: (1) jadikan bot ni admin channel kau (Channel > Administrators > Add Admin > pilih bot), (2) taip /channel @namachannel\n\n" + guna, MAIN_KB)
+            send(chat, "📢 Wajib join channel: <b>MATI</b>\n\nCara hidupkan: (1) jadikan bot ini admin channel (Channel > Administrators > Add Admin > pilih bot), (2) taip /channel @namachannel\n\n" + guna, MAIN_KB)
         return
     if a[0] == "0" and len(a) == 1:
         J["chan"] = {}
@@ -3651,6 +3754,9 @@ def _handle(u):
         return
     if uid not in ADMINS:
         if kedai_aktif():
+            if text.split()[0].split("@")[0].lower() == "/speed":
+                kedai_speed(chat, msg["from"])
+                return
             kedai_start(chat, msg["from"])
             return
         # senyap: orang asing tak dapat balasan langsung. Cuma catat sekali setiap ID dalam log.
