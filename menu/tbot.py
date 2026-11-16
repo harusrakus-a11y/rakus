@@ -1064,14 +1064,18 @@ def on_command(chat, text):
             "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
-            "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)", "/batal - berhenti soalan"]))
+            "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
+            "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
+            "/trialreset ID [padam] - bagi orang tu cuba trial semula", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
         STATE.pop(chat, None)
         send(chat, "Batal.", MAIN_KB)
-    elif cmd in ("/trial", "/trialon", "/trialoff", "/trialset", "/trialban", "/trialbuka", "/trialuji"):
+    elif cmd in ("/trial", "/trialon", "/trialoff", "/trialset", "/trialban", "/trialbuka", "/trialuji", "/trialreset"):
         trial_cmd(chat, cmd, a)
     elif cmd in ("/jual", "/jualon", "/jualoff", "/jualset", "/jualnota", "/order", "/sahkan", "/tolak"):
         jual_cmd(chat, cmd, a)
+    elif cmd in ("/telco", "/telcook", "/telcolemah", "/telcotak"):
+        telco_cmd(chat, cmd, a)
     elif cmd == "/senarai":
         send(chat, list_msg(), MAIN_KB)
     elif cmd == "/status":
@@ -1310,7 +1314,9 @@ def trial_cb(chat, frm, data):
             trial_buat(chat, frm, kind, 0)
             return
         T = telcos()
-        b = [btn(t[0], "pc:%s:%d" % (kind, i + 1)) for i, t in enumerate(T)]
+        J = jual_load()
+        b = [btn(("" if telco_status(J, x[0]) == "ok" else TELCO_ST[telco_status(J, x[0])] + " ") + x[0], "pc:%s:%d" % (kind, i + 1))
+             for i, x in enumerate(T) if telco_status(J, x[0]) != "tak"]
         kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0" % kind)]]
         send(chat, "Pilih telco kau:", kb)
     elif p[0] == "pc" and len(p) == 3 and p[2].isdigit():
@@ -1363,6 +1369,9 @@ def trial_buat(chat, frm, kind, n):
             send(chat, "Telco tak sah. Taip /start.")
             return
         tl = T[n - 1]
+        if telco_status(jual_load(), tl[0]) == "tak":
+            send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(tl[0]))
+            return
     user = None
     for _ in range(10):
         c = trial_nama(kind)
@@ -1441,7 +1450,7 @@ def trial_admin_msg():
     for r in d["rec"]:
         L.append(" %s  %s  sisa %s  (tg:%d)" % (TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(max(0, r["tamat"] - now)), r["uid"]))
     L += ["", "/trialon  /trialoff", "/trialset minit=60 (atau hari=1) jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama",
-          "/trialban ID  /trialbuka ID  /trialuji (cuba sendiri)"]
+          "/trialban ID  /trialbuka ID  /trialuji (cuba sendiri)", "/trialreset ID  (kosongkan jeda, dia boleh minta trial lagi; tambah padam untuk tamatkan trial yang masih jalan)"]
     return "\n".join(L)
 
 
@@ -1516,6 +1525,27 @@ def trial_cmd(chat, cmd, a):
             d["banned"] = [x for x in d["banned"] if x != i]
         trial_save(d)
         send(chat, "%s %d. Disekat sekarang: %d orang." % ("Disekat" if cmd == "/trialban" else "Dibuka", i, len(d["banned"])), MAIN_KB)
+    elif cmd == "/trialreset":
+        if not a or not a[0].isdigit() or len(a) > 2 or (len(a) == 2 and a[1].lower() != "padam"):
+            send(chat, "Guna: /trialreset ID_Telegram  (tambah padam untuk tamatkan trial yang masih jalan sekarang)")
+            return
+        i = int(a[0])
+        ada = d["last"].pop(str(i), None) is not None
+        act = [r for r in d["rec"] if r["uid"] == i]
+        if act and len(a) == 2:
+            act[0]["tamat"] = time.time() - 1
+            act[0].pop("next", None)
+        trial_save(d)
+        if act and len(a) == 2:
+            trial_sweep()
+            act = [r for r in trial_load()["rec"] if r["uid"] == i]
+        if act:
+            send(chat, "Jeda %d dikosongkan. Tapi dia masih ada trial %s (tamat dalam %s). Taip /trialreset %d padam kalau nak tamatkan sekarang." % (
+                i, code(act[0]["user"]), trial_tempoh(act[0]["tamat"] - time.time()), i), MAIN_KB)
+            return
+        send(chat, "%d: jeda trial dikosongkan%s. Dia boleh minta trial baru." % (i, "" if ada else " (tiada rekod jeda sebelum ni)"), MAIN_KB)
+        if d["aktif"]:
+            send(i, "🎁 Kau boleh minta trial lagi. Taip /start.")
     elif cmd == "/trialuji":
         if not d["aktif"]:
             send(chat, "Trial masih TUTUP. Taip /trialon dulu.")
@@ -1530,11 +1560,12 @@ def trial_cmd(chat, cmd, a):
 # Tetapan dan rekod: /etc/tbot/jual.json (tiada UUID atau password disimpan di situ).
 JUAL_F = "/etc/tbot/jual.json"
 JUAL_DEF = {"aktif": False, "sen": 1000, "hari": 30, "kuota": 0, "iplimit": 2, "jenis": ["v", "m", "t", "s"], "luput": 24,
-            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}}
+            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}, "telco": {}, "telco_t": 0}
 JUAL_RANGE = {"hari": (1, 365), "kuota": (0, 9999), "ip": (0, 20), "luput": (1, 168)}
 RM_RE = re.compile(r"^\d{1,4}(\.\d{1,2})?$")
 KEDAI_SENYAP = {}
-KEDAI_CB = ("ky:", "kb:", "kr:", "ka:", "kt:", "kx:")
+KEDAI_CB = ("ky:", "kb:", "kc:", "kr:", "ka:", "kt:", "kx:")
+TELCO_ST = {"ok": "✅", "lemah": "⚠️", "tak": "❌"}
 
 
 def jual_load():
@@ -1570,6 +1601,42 @@ def rm(sen):
 
 def jual_hidup(d):
     return bool(d["aktif"] and d["qr"] and d["jenis"])
+
+
+def telco_status(J, name):
+    s = J.get("telco", {}).get(name, {}).get("s", "ok")
+    return s if s in TELCO_ST else "ok"
+
+
+def telco_senarai_pelanggan(J, boleh_trial):
+    T = telcos()
+    if not T:
+        return "Belum ada telco disediakan. Pilih link biasa."
+    ok = [x[0] for x in T if telco_status(J, x[0]) == "ok"]
+    lm = [x[0] for x in T if telco_status(J, x[0]) == "lemah"]
+    tk = [x[0] for x in T if telco_status(J, x[0]) == "tak"]
+    L = ["📶 <b>Telco yang berfungsi</b>", "✅ Berfungsi: %s" % (E(", ".join(ok)) if ok else "tiada")]
+    if lm:
+        L.append("⚠️ Kadang-kadang / lemah: %s" % E(", ".join(lm)))
+    if tk:
+        L.append("❌ Tak berfungsi sekarang: %s" % E(", ".join(tk)))
+    if J.get("telco_t"):
+        L.append("Dikemas kini: %s" % datetime.datetime.fromtimestamp(J["telco_t"]).strftime("%d-%m-%Y %H:%M"))
+    L += ["", "Pilih telco kau masa beli." + (" Nak cuba dulu? Guna Trial percuma." if boleh_trial else "")]
+    return "\n".join(L)
+
+
+def telco_admin_msg(J):
+    T = telcos()
+    L = ["📶 <b>Status telco</b>  (pelanggan nampak ini)"]
+    for i, x in enumerate(T):
+        L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, x[0])], E(x[0])))
+    if not T:
+        L.append("(tiada telco dalam telco.conf)")
+    L += ["", "✅ berfungsi   ⚠️ lemah (boleh dipilih, ada amaran)   ❌ tak berfungsi (disorok dari pilihan)",
+          "/telcook nama [nama ...]", "/telcolemah nama", "/telcotak nama",
+          "Guna nama atau nombor, atau  semua.  Telco tak diubah = berfungsi."]
+    return "\n".join(L)
 
 
 def tg_nama(frm):
@@ -1653,7 +1720,8 @@ def kedai_start(chat, frm):
         if len(KEDAI_SENYAP) > 2000:
             KEDAI_SENYAP.clear()
         KEDAI_SENYAP[uid] = now
-    kb = [[btn("🛒 Beli akaun", "ky:beli"), btn("🔁 Renew", "ky:renew")], [btn("📦 Akaun saya", "ky:akaun")]]
+    kb = [[btn("🛒 Beli akaun", "ky:beli"), btn("🔁 Renew", "ky:renew")],
+          [btn("📦 Akaun saya", "ky:akaun"), btn("📶 Telco berfungsi", "ky:telco")]]
     if T["aktif"] and T["jenis"]:
         kb.insert(0, [btn("🎁 Trial percuma", "ky:trial")])
     send(chat, "\n".join(["✦ <b>KANCIL ECEM</b> ✦", "Developer by kancil ecem", "",
@@ -1665,6 +1733,8 @@ def jual_pay_screen(chat, o, J):
     t = ["🛒 <b>Order %s</b>" % code(o["id"]),
          ("%s • %d hari • %s" % (TRIAL_KIND[o["kind"]], o["hari"], rm(o["sen"]))) if o["jenis"] == "baru" else
          ("Renew %s %s • tambah %d hari • %s" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"], rm(o["sen"])))]
+    if o.get("telco"):
+        t.append("Telco: <b>%s</b>" % E(o["telco"]))
     t += ["", "1) Scan QR dan bayar <b>%s</b> tepat." % rm(o["sen"]),
           "2) Letak kod %s dalam rujukan atau catatan bayaran." % code(o["id"]),
           "3) Hantar <b>gambar resit</b> kat sini.",
@@ -1674,7 +1744,7 @@ def jual_pay_screen(chat, o, J):
     send_photo(chat, J["qr"], "\n".join(t), [[btn("❌ Batal order", "kx:%s" % o["id"])]])
 
 
-def jual_order_baru(chat, frm, kind, jenis, user=""):
+def jual_order_baru(chat, frm, kind, jenis, user="", telco=""):
     J = jual_load()
     uid = frm["id"]
     if not jual_hidup(J) or kind not in J["jenis"]:
@@ -1689,7 +1759,7 @@ def jual_order_baru(chat, frm, kind, jenis, user=""):
             jual_pay_screen(chat, o, J)
         return
     o = {"id": jual_order_id(J), "uid": uid, "chat": chat, "nama": tg_nama(frm), "tg": frm.get("username", ""),
-         "fn": frm.get("first_name", ""), "kind": kind, "jenis": jenis, "user": user, "sen": J["sen"], "hari": J["hari"],
+         "fn": frm.get("first_name", ""), "kind": kind, "jenis": jenis, "user": user, "telco": telco, "sen": J["sen"], "hari": J["hari"],
          "t": time.time(), "status": "menunggu_bayar", "resit": 0}
     J["orders"].append(o)
     jual_save(J)
@@ -1715,7 +1785,7 @@ def jual_kb_telco(kind, user):
     return kb
 
 
-def jual_butiran(kind, user, a, kepala="Akaun %s"):
+def jual_butiran(kind, user, a, kepala="Akaun %s", telco=""):
     """a = padanan find(): (nama, luput, uuid/kata laluan). Teks HTML butiran akaun untuk pelanggan."""
     if kind == "s":
         pw, exp = a[2], a[1]
@@ -1725,17 +1795,35 @@ def jual_butiran(kind, user, a, kepala="Akaun %s"):
         return "\n".join(t)
     t = ["<b>%s</b>  ✦ kancil ecem" % (kepala % TRIAL_KIND[kind])]
     t += [l for l in acct_info(kind, user, a[2], a[1]) if not l.startswith("Nota")]
+    tl = [x for x in telcos() if x[0] == telco] if telco else []
+    if tl:
+        t += ["", "<b>Link telco pilihan: %s</b>" % E(tl[0][0]), code(telco_link(a[2], user, tl[0], kind))]
     for lab, lk in std_links(kind, user, a[2]):
         t += ["", "<b>%s</b>" % E(lab), code(lk)]
     t += ["", "OpenClash: " + code("http://%s:89/%s-%s.txt" % (domain(), KIND[kind]["pub"], user)), "", "Pilih telco untuk link tambahan:"]
     return "\n".join(t)
 
 
-def jual_hantar_akaun(chat, kind, user, kepala):
+def jual_hantar_akaun(chat, kind, user, kepala, telco=""):
     a = find(kind, user)
     if not a:
         return
-    send(chat, jual_butiran(kind, user, a, kepala), jual_kb_telco(kind, user) if kind != "s" else None)
+    send(chat, jual_butiran(kind, user, a, kepala, telco), jual_kb_telco(kind, user) if kind != "s" else None)
+
+
+def jual_pilih_telco(chat, J, kind):
+    T = telcos()
+    b = []
+    for i, x in enumerate(T):
+        s = telco_status(J, x[0])
+        if s != "tak":
+            b.append(btn("%s %s" % (TELCO_ST[s], x[0]), "kc:%s:%d" % (kind, i + 1)))
+    tk = [x[0] for x in T if telco_status(J, x[0]) == "tak"]
+    teks = ["Pilih telco kau dulu. ✅ berfungsi, ⚠️ kadang-kadang."]
+    if tk:
+        teks.append("❌ Tak berfungsi sekarang (tak boleh dipilih): %s" % E(", ".join(tk)))
+    teks += ["", "Lepas pilih, bot hantar QR bayaran."]
+    send(chat, "\n".join(teks), rows(b, 2) + [[btn("Tak pasti / mana-mana", "kc:%s:0" % kind)]])
 
 
 def kedai_cb(chat, frm, data):
@@ -1750,6 +1838,9 @@ def kedai_cb(chat, frm, data):
     if k == "ky" and len(p) == 2:
         if p[1] == "trial":
             trial_start(chat, frm)
+        elif p[1] == "telco":
+            send(chat, telco_senarai_pelanggan(J, T["aktif"] and bool(T["jenis"])),
+                 [[btn("🛒 Beli akaun", "ky:beli")]] if jual_hidup(J) else None)
         elif not jual_hidup(J):
             send(chat, "Jualan tak dibuka sekarang.")
         elif p[1] == "beli":
@@ -1769,7 +1860,25 @@ def kedai_cb(chat, frm, data):
             else:
                 send(chat, "Akaun kau:", rows([btn("%s %s (%d hari)" % (TRIAL_KIND[kk], u, days_left(a[1])), "ka:%s:%s" % (kk, u)) for kk, u, a in L], 1))
     elif k == "kb" and len(p) == 2 and p[1] in TRIAL_KIND:
-        jual_order_baru(chat, frm, p[1], "baru")
+        if not jual_hidup(J) or p[1] not in J["jenis"]:
+            send(chat, "Jualan tak dibuka sekarang.")
+        elif p[1] == "s" or jual_buka(J, uid) or not telcos():
+            jual_order_baru(chat, frm, p[1], "baru")
+        else:
+            jual_pilih_telco(chat, J, p[1])
+    elif k == "kc" and len(p) == 3 and p[1] in TRIAL_KIND and p[1] != "s" and p[2].isdigit():
+        T2 = telcos()
+        n = int(p[2])
+        if n > len(T2):
+            return
+        nama = ""
+        if n:
+            nama = T2[n - 1][0]
+            if jual_hidup(J) and telco_status(J, nama) == "tak":
+                send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(nama))
+                jual_pilih_telco(chat, J, p[1])
+                return
+        jual_order_baru(chat, frm, p[1], "baru", telco=nama)
     elif k == "kr" and len(p) == 3 and p[1] in TRIAL_KIND:
         if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
             return
@@ -1843,7 +1952,7 @@ def kedai_media(msg):
     jual_save(J)
     adm_cap = "\n".join(["🧾 <b>Resit order %s</b>" % code(o["id"]),
                          "Pelanggan: %s (tg:%d)" % (E(o["nama"]), uid),
-                         ("Beli %s %d hari" % (TRIAL_KIND[o["kind"]], o["hari"])) if o["jenis"] == "baru" else
+                         ("Beli %s %d hari%s" % (TRIAL_KIND[o["kind"]], o["hari"], (" • telco %s" % E(o["telco"])) if o.get("telco") else "")) if o["jenis"] == "baru" else
                          ("Renew %s %s +%d hari" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"])),
                          "Jumlah: <b>%s</b>" % rm(o["sen"]), "",
                          "⚠️ Semak duit dah masuk dalam bank dulu, baru tekan Sahkan."])
@@ -1902,7 +2011,7 @@ def jual_sahkan(oid, adm_chat):
     J["akaun"]["%s:%s" % (kind, user)] = o["uid"]
     o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), user
     jual_save(J)
-    jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap")
+    jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap", o.get("telco", ""))
     send(adm_chat, "✅ Order %s disahkan: %s %s dicipta untuk %s." % (code(oid), TRIAL_KIND[kind], code(user), E(o["nama"])), MAIN_KB)
 
 
@@ -1961,8 +2070,44 @@ def jual_admin_msg():
           "/jualset harga=10 hari=30 kuota=0 ip=2 jenis=v,m,t,s luput=24",
           "/jualnota teks (arahan tambahan kat skrin bayar, 0 = padam)",
           "/sahkan KOD  /tolak KOD (kalau butang hilang)",
+          "/telco (tanda telco berfungsi / lemah / tak, pelanggan nampak dan pilih sebelum bayar)",
           "QR: hantar gambar QR bank dengan kapsyen /setqr"]
     return "\n".join(L)
+
+
+def telco_cmd(chat, cmd, a):
+    J = jual_load()
+    if cmd == "/telco":
+        send(chat, telco_admin_msg(J), MAIN_KB)
+        return
+    st = {"/telcook": "ok", "/telcolemah": "lemah", "/telcotak": "tak"}[cmd]
+    T = telcos()
+    if not a:
+        send(chat, "Guna: %s nama [nama ...]  (atau nombor, atau  semua).  Taip /telco untuk senarai." % cmd)
+        return
+    if len(a) == 1 and a[0].lower() == "semua":
+        tgt = [x[0] for x in T]
+    else:
+        tgt = []
+        for w in a:
+            if w.isdigit() and 1 <= int(w) <= len(T):
+                n = T[int(w) - 1][0]
+            else:
+                m = [x[0] for x in T if x[0].lower() == w.lower()]
+                if not m:
+                    send(chat, "Telco %s tak jumpa.\n\n%s" % (code(w[:30]), telco_admin_msg(J)))
+                    return
+                n = m[0]
+            if n not in tgt:
+                tgt.append(n)
+    for n in tgt:
+        if st == "ok":
+            J["telco"].pop(n, None)
+        else:
+            J["telco"][n] = {"s": st, "t": time.time()}
+    J["telco_t"] = time.time()
+    jual_save(J)
+    send(chat, "Disimpan.\n\n" + telco_admin_msg(J), MAIN_KB)
 
 
 def jual_cmd(chat, cmd, a):
