@@ -1431,6 +1431,8 @@ def on_command(chat, text):
         hc_cmd(chat, cmd, a)
     elif cmd == "/hcnama":
         hc_nama(chat, text)
+    elif cmd == "/hcset":
+        hc_set_teks(chat, text)
     elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
         vps_cmd(chat, cmd, a)
     elif cmd == "/senarai":
@@ -2441,6 +2443,12 @@ def kedai_media(msg):
         if w and w[0].split("@")[0].lower() == "/hcset" and msg.get("document"):
             hc_set(chat, cap, msg["document"])
             return
+        d = msg.get("document") or {}
+        if (d.get("file_name") or "").lower().endswith(".hc"):
+            HC_LAST[chat] = {"doc": d, "t": time.time()}
+            send(chat, "📥 Fail <b>%s</b> diterima. Sekarang taip arahan:\n<code>/hcset nama [server] [nama telco, ...]</code>\n"
+                       "Contoh: <code>/hcset multi v2 Umo ultra freeze, Digi exp</code>\n(Bot ingat fail ni 30 minit.)" % E(d["file_name"]))
+            return
         if cap.split("@")[0].lower() == "/setqr" and msg.get("photo"):
             J = jual_load()
             J["qr"] = msg["photo"][-1]["file_id"]
@@ -3151,6 +3159,19 @@ def hc_buang_vps(J, vid):
             hc_padam_fail(J, n, vid)
 
 
+HC_LAST = {}
+
+
+def hc_set_teks(chat, text):
+    """/hcset ditaip sebagai mesej biasa: guna fail .hc terakhir yang admin hantar (30 minit)."""
+    x = HC_LAST.get(chat)
+    if not x or time.time() - x["t"] > 1800:
+        HC_LAST.pop(chat, None)
+        send(chat, "Hantar dulu fail .hc kat bot ni (klip kertas > File), lepas tu taip arahan ni.")
+        return
+    hc_set(chat, text, x["doc"])
+
+
 def hc_set(chat, cap, doc):
     """cap: '/hcset nama [server] [nama telco, ...]' dan baris tambahan = nama telco yang pelanggan nampak."""
     baris = [x.strip() for x in cap.strip().split("\n")]
@@ -3254,7 +3275,7 @@ def hc_cmd(chat, cmd, a):
         if not H:
             L.append("Belum ada.")
         L += ["", "<b>Tambah</b>: dalam HTTP Custom buat config (payload dsb), hidupkan lock tapi biar bahagian Account (username/password) boleh diedit, Export. "
-              "Hantar fail .hc tu kat bot ni dengan kapsyen  /hcset nama [server]",
+              "Hantar fail .hc tu kat bot ni (klip kertas > File), lepas tu taip  /hcset nama [server]  (boleh juga letak arahan ni sebagai kapsyen fail)",
               "/hcnama nama Nama satu, Nama dua - nama telco yang pelanggan nampak (0 = buang)",
               "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang tengah kau pilih.",
               "/hcfail nama [server] - bot hantar fail tu balik untuk uji", "/hcpadam nama [server] - buang", "/telcotak nama - sorok sementara dari pelanggan"]
