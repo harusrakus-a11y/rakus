@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-# tbot - bot Telegram untuk urus akaun VLESS dan SSH di VPS autoscript (admin sahaja)
+# tbot - bot Telegram untuk urus akaun VLESS, VMess, Trojan dan SSH di VPS autoscript (admin sahaja)
 # Konfigurasi: /etc/tbot/config  (TOKEN=... dan ADMINS=id1,id2). Tiada rahsia dalam fail ni.
+import base64
 import datetime
 import html
 import json
@@ -44,6 +45,7 @@ UTXT_RE = re.compile(r"^[A-Za-z0-9._-]{8,30}$")
 TOKEN = ""
 ADMINS = set()
 STATE = {}
+SEEN = set()
 _telco_time = 0.0
 
 
@@ -108,7 +110,8 @@ def rows(buttons, n=2):
 
 
 MAIN_KB = [
-    [btn("➕ VLESS", "m:vl"), btn("➕ SSH", "m:ss")],
+    [btn("➕ VLESS", "m:vl"), btn("➕ VMess", "m:vm")],
+    [btn("➕ Trojan", "m:tr"), btn("➕ SSH", "m:ss")],
     [btn("📋 Senarai", "m:ls"), btn("🔎 Semak", "m:ck")],
     [btn("🔁 Renew", "m:rn"), btn("🗑 Padam", "m:dl")],
     [btn("ℹ️ Status", "m:st")],
@@ -163,14 +166,32 @@ def days_left(exp):
         return 0
 
 
-def vless_users():
+KIND = {
+    "v": {"nama": "VLESS", "dir": "/etc/vless", "m1": "#vl", "m2": "#vlg", "lst": "#vl", "pub": "vless"},
+    "m": {"nama": "VMess", "dir": "/etc/vmess", "m1": "#vm", "m2": "#vmg", "lst": "#vmg", "pub": "vmess"},
+    "t": {"nama": "Trojan", "dir": "/etc/trojan", "m1": "#tr", "m2": "#trg", "lst": "#tr", "pub": "trojan"},
+}
+XKINDS = ("v", "m", "t")
+FLOWKIND = {"vl": "v", "vm": "m", "tr": "t"}
+
+
+def kname(kind):
+    return KIND[kind]["nama"] if kind in KIND else "SSH"
+
+
+def xusers(kind):
     out = []
+    mk = KIND[kind]["lst"] + " "
     for line in lines_of("/etc/xray/config.json"):
-        if line.startswith("#vl "):
+        if line.startswith(mk):
             p = line.split()
             if len(p) >= 4:
                 out.append((p[1], p[2], p[3]))
     return out
+
+
+def vless_users():
+    return xusers("v")
 
 
 def ssh_users():
@@ -183,20 +204,27 @@ def ssh_users():
     return out
 
 
+def users_of(kind):
+    return ssh_users() if kind == "s" else xusers(kind)
+
+
 def name_taken(name):
-    if any(u[0] == name for u in vless_users() + ssh_users()):
+    allu = ssh_users()
+    for k in XKINDS:
+        allu += xusers(k)
+    if any(u[0] == name for u in allu):
         return True
     if ('"email": "%s"' % name) in "\n".join(lines_of("/etc/xray/config.json")):
         return True
     return run(["id", name]).returncode == 0
 
 
-def nota_get(user):
-    return rd("/etc/vless/nota/%s" % user, "")
+def nota_get(user, kind="v"):
+    return rd("%s/nota/%s" % (KIND[kind]["dir"], user), "")
 
 
-def nota_set(user, text):
-    p = P("/etc/vless/nota/%s" % user)
+def nota_set(user, text, kind="v"):
+    p = P("%s/nota/%s" % (KIND[kind]["dir"], user))
     text = (text or "").strip()
     if not text:
         try:
@@ -210,8 +238,7 @@ def nota_set(user, text):
 
 
 def find(kind, name):
-    src = vless_users() if kind == "v" else ssh_users()
-    for u in src:
+    for u in users_of(kind):
         if u[0] == name:
             return u
     return None
@@ -285,19 +312,37 @@ def telcos():
     return out
 
 
-def telco_link(uid, user, t):
+def telco_path(kind, p):
+    if p == "/vless":
+        return {"v": "/vless", "m": "/vmess", "t": "/trojan-ws"}[kind]
+    return p
+
+
+def telco_link(uid, user, t, kind="v"):
     n, a, h, p, port = t
     d = domain()
     a = a.replace("{domain}", d)
     h = h.replace("{domain}", d)
+    p = telco_path(kind, p)
+    if kind == "m":
+        js = json.dumps({"v": "2", "ps": "%s-%s" % (user, n), "add": a, "port": port, "id": uid, "aid": "0", "net": "ws",
+                         "path": p, "type": "none", "host": h, "tls": "none"}, separators=(",", ":"))
+        return "vmess://" + base64.b64encode(js.encode()).decode()
+    if kind == "t":
+        return "trojan://%s@%s:%s?path=%s&security=none&host=%s&type=ws#%s-%s" % (
+            uid, a, port, p.replace("/", "%2F"), h, user, n)
     return "vless://%s@%s:%s?encryption=none&type=ws&host=%s&headerType=none&path=%s#%s-%s" % (
         uid, a, port, h, p.replace("/", "%2F"), user, n)
 
 
-def telco_kb(user):
-    b = [btn(t[0], "t:%s:%d" % (user, i + 1)) for i, t in enumerate(telcos())]
+TACT = {"v": "t", "m": "tm", "t": "tt"}
+
+
+def telco_kb(user, kind="v"):
+    act = TACT[kind]
+    b = [btn(t[0], "%s:%s:%d" % (act, user, i + 1)) for i, t in enumerate(telcos())]
     kb = rows(b, 3)
-    kb.append([btn("Semua telco", "t:%s:0" % user), btn("📝 Nota", "n:%s" % user)])
+    kb.append([btn("Semua telco", "%s:%s:0" % (act, user)), btn("📝 Nota", "n:%s:%s" % (kind, user))])
     return kb
 
 
@@ -379,33 +424,216 @@ _______________________________
            l3=vless_std_links(user, uid)[2][1])
 
 
-def vless_create(user, days, iplim, quota, custom_uuid=None, nota=""):
+def vmess_link(user, uid, port, net, path, tls, host=None):
+    d = domain()
+    js = {"v": "2", "ps": user, "add": d, "port": str(port), "id": uid, "aid": "0", "net": net,
+          "path": path, "type": "none", "host": host or d, "tls": tls}
+    return "vmess://" + base64.b64encode(json.dumps(js).encode()).decode()
+
+
+def vmess_std_links(user, uid):
+    return [
+        ("WS TLS (443)", vmess_link(user, uid, 443, "ws", "/vmess", "tls")),
+        ("WS NTLS (80)", vmess_link(user, uid, 80, "ws", "/vmess", "none")),
+        ("gRPC (443)", vmess_link(user, uid, 443, "grpc", "vmess-grpc", "tls")),
+    ]
+
+
+def trojan_std_links(user, uid):
+    d = domain()
+    return [
+        ("WS TLS (443)", "trojan://%s@%s:443?path=%%2Ftrojan-ws&security=tls&host=%s&type=ws&sni=%s#%s" % (uid, d, d, d, user)),
+        ("gRPC (443)", "trojan://%s@%s:443?mode=gun&security=tls&type=grpc&serviceName=trojan-grpc&sni=%s#%s" % (uid, d, d, user)),
+    ]
+
+
+def std_links(kind, user, uid):
+    return {"v": vless_std_links, "m": vmess_std_links, "t": trojan_std_links}[kind](user, uid)
+
+
+def vmess_txt(user, uid):
+    d = domain()
+    sep = "_______________________________________________________"
+    t = """{s}
+Format Vmess WS (CDN)
+{s}
+- name: vmess-{u}-WS (CDN)
+type: vmess
+server: {d}
+port: 443
+uuid: {id}
+alterId: 0
+cipher: auto
+udp: true
+tls: true
+skip-cert-verify: true
+servername: {d}
+network: ws
+ws-opts:
+path: /vmess
+headers:
+Host: {d}
+{s}
+Format Vmess WS (CDN) Non TLS
+{s}
+- name: vmess-{u}-WS (CDN) Non TLS
+type: vmess
+server: {d}
+port: 80
+uuid: {id}
+alterId: 0
+cipher: auto
+udp: true
+tls: false
+skip-cert-verify: false
+servername: {d}
+network: ws
+ws-opts:
+path: /vmess
+headers:
+Host: {d}
+{s}
+Format Vmess gRPC (SNI)
+{s}
+- name: vmess-{u}-gRPC (SNI)
+server: {d}
+port: 443
+type: vmess
+uuid: {id}
+alterId: 0
+cipher: auto
+network: grpc
+tls: true
+servername: {d}
+skip-cert-verify: true
+grpc-opts:
+grpc-service-name: vmess-grpc
+{s}
+Format Vmess WS (CDN) Non TLS Opok TSEL
+{s}
+- name: vmess-{u}-WS (CDN) Non TLS
+type: vmess
+server: {d}
+port: 80
+uuid: {id}
+alterId: 0
+cipher: auto
+udp: true
+tls: false
+skip-cert-verify: true
+servername: comunity.instagram.com
+network: ws
+ws-opts:
+path: : http://tsel.me/worryfree
+headers:
+Host: {d}
+{s}
+Link Vmess Account
+{s}
+Link TLS : {l1}
+{s}
+Link NTLS : {l2}
+{s}
+Link gRPC : {l3}
+{s}
+Link Opok : {l4}
+{s}
+""".format(s=sep, u=user, d=d, id=uid, l1=vmess_std_links(user, uid)[0][1], l2=vmess_std_links(user, uid)[1][1],
+           l3=vmess_std_links(user, uid)[2][1], l4=vmess_link(user, uid, 80, "ws", "http://tsel.me/worryfree", "none", "tsel.me"))
+    return t
+
+
+def trojan_txt(user, uid):
+    d = domain()
+    sep = "_______________________________"
+    L = trojan_std_links(user, uid)
+    return """{s}
+Format Trojan WS (CDN)
+{s}
+- name: Trojan-{u}-WS (CDN)
+server: {d}
+port: 443
+type: trojan
+password: {id}
+network: ws
+sni: {d}
+skip-cert-verify: true
+udp: true
+ws-opts:
+path: /trojan-ws
+headers:
+Host: {d}
+{s}
+Format Trojan gRPC
+{s}
+- name: Trojan-{u}-gRPC (SNI)
+type: trojan
+server: {d}
+port: 443
+password: {id}
+udp: true
+sni: {d}
+skip-cert-verify: true
+network: grpc
+grpc-opts:
+grpc-service-name: trojan-grpc
+{s}
+Link Trojan Account
+{s}
+Link WS : {l1}
+{s}
+Link GRPC : {l2}
+{s}
+""".format(s=sep, u=user, d=d, id=uid, l1=L[0][1], l2=L[1][1])
+
+
+def acct_txt(kind, user, uid):
+    return {"v": vless_txt, "m": vmess_txt, "t": trojan_txt}[kind](user, uid)
+
+
+def xray_create(kind, user, days, iplim, quota, custom_uuid=None, nota=""):
+    K = KIND[kind]
+    D = K["dir"]
     uid = custom_uuid or str(uuidlib.uuid4())
     exp = exp_after(days)
+    if kind == "v":
+        a1, c1, a2, c2 = "#vless", "#vl %s %s %s" % (user, exp, uid), "#vlessgrpc", "#vlg %s %s" % (user, exp)
+        cl = '},{"id": "%s","email": "%s"' % (uid, user)
+    elif kind == "m":
+        a1, c1, a2, c2 = "#vmess", "#vm %s %s" % (user, exp), "#vmessgrpc", "#vmg %s %s %s" % (user, exp, uid)
+        cl = '},{"id": "%s","alterId": 0,"email": "%s"' % (uid, user)
+    else:
+        a1, c1, a2, c2 = "#trojanws", "#tr %s %s %s" % (user, exp, uid), "#trojangrpc", "#trg %s %s" % (user, exp)
+        cl = '},{"password": "%s","email": "%s"' % (uid, user)
 
     def edit():
-        sed(r'/#vless$/a\#vl %s %s %s' % (user, exp, uid) + "\\\n" + '},{"id": "%s","email": "%s"' % (uid, user))
-        sed(r'/#vlessgrpc$/a\#vlg %s %s' % (user, exp) + "\\\n" + '},{"id": "%s","email": "%s"' % (uid, user))
+        sed(r'/%s$/a\%s' % (a1, c1) + "\\\n" + cl)
+        sed(r'/%s$/a\%s' % (a2, c2) + "\\\n" + cl)
 
     ok, err = guarded_config_edit(edit)
     if not ok:
         return None, err
     q = quota or 9999
     il = iplim or 9999
-    os.makedirs(P("/etc/vless/akun"), exist_ok=True)
-    nota_set(user, nota)
-    with open(P("/etc/vless/%s" % user), "w") as f:
+    os.makedirs(P(D + "/akun"), exist_ok=True)
+    nota_set(user, nota, kind)
+    with open(P("%s/%s" % (D, user)), "w") as f:
         f.write("%d\n" % (q * 1024 ** 3))
-    with open(P("/etc/vless/%sIP" % user), "w") as f:
-        f.write("%d\n" % il)
+    if kind == "t":
+        with open(P("/etc/trojan/akun/%s" % user), "w") as f:
+            f.write("login_ip=%d\n" % il)
+    else:
+        with open(P("%s/%sIP" % (D, user)), "w") as f:
+            f.write("%d\n" % il)
+    if kind == "v":
+        with open(P("/etc/vless/akun/%s" % user), "w") as f:
+            f.write("username=%s\nlimit_quota=%dGB\nusage_quota=0MB\nlogin_time=%s\nlogin_ip=0\n" % (
+                user, q, time.strftime("%H:%M:%S.000000000")))
     os.makedirs(P("/home/vps/public_html"), exist_ok=True)
-    with open(P("/home/vps/public_html/vless-%s.txt" % user), "w") as f:
-        f.write(vless_txt(user, uid))
-    with open(P("/etc/vless/akun/%s" % user), "w") as f:
-        f.write("username=%s\nlimit_quota=%dGB\nusage_quota=0MB\nlogin_time=%s\nlogin_ip=0\n" % (
-            user, q, time.strftime("%H:%M:%S.000000000")))
+    with open(P("/home/vps/public_html/%s-%s.txt" % (K["pub"], user)), "w") as f:
+        f.write(acct_txt(kind, user, uid))
     d = domain()
-    L = [" ◇━━━━━━━━━━━━━━━━━◇", " • Premium Vless Account •", " ◇━━━━━━━━━━━━━━━━━◇",
+    L = [" ◇━━━━━━━━━━━━━━━━━◇", " • Premium %s Account •" % K["nama"], " ◇━━━━━━━━━━━━━━━━━◇",
          " User         : %s" % user]
     if nota:
         L.append(" Nota         : %s" % nota)
@@ -413,37 +641,45 @@ def vless_create(user, days, iplim, quota, custom_uuid=None, nota=""):
           " Domain       : %s" % d, " Login Limit  : %d IP" % il]
     if q != 9999:
         L.append(" Quota Limit  : %d GB" % q)
-    L += [" Port TLS     : 443", " Port NTLS    : 80,8080", " Port gRPC    : 443", " UUID         : %s" % uid,
-          " Encryption   : none", " Network      : ws", " Path         : /vless", " Path grpc    : /vless-grpc",
-          " ◇━━━━━━━━━━━━━━━━━◇"]
-    for lab, lk in vless_std_links(user, uid):
+    if kind == "v":
+        L += [" Port TLS     : 443", " Port NTLS    : 80,8080", " Port gRPC    : 443", " UUID         : %s" % uid,
+              " Encryption   : none", " Network      : ws", " Path         : /vless", " Path grpc    : /vless-grpc"]
+    elif kind == "m":
+        L += [" Port TLS     : 443", " Port NTLS    : 80,8080", " Port gRPC    : 443", " AlterId      : 0",
+              " Security     : auto", " Path         : /vmess", " Service      : vmess-grpc", " UUID         : %s" % uid]
+    else:
+        L += [" Port TLS     : 443", " Port gRPC    : 443", " Path WS      : /trojan-ws", " Path gRPC    : /trojan-grpc",
+              " Key          : %s" % uid]
+    L.append(" ◇━━━━━━━━━━━━━━━━━◇")
+    for lab, lk in std_links(kind, user, uid):
         L += [" Link %s :" % lab, lk, " ◇━━━━━━━━━━━━━━━━━◇"]
-    L += [" Format Openclash : http://%s:89/vless-%s.txt" % (d, user), " Expired Until   : %s" % exp,
+    L += [" Format Openclash : http://%s:89/%s-%s.txt" % (d, K["pub"], user), " Expired Until   : %s" % exp,
           " ◇━━━━━━━━━━━━━━━━━◇"]
-    with open(P("/etc/vless/akun/log-create-%s.log" % user), "w") as f:
+    with open(P("%s/akun/log-create-%s.log" % (D, user)), "w") as f:
         f.write("\n".join(L) + "\n")
     return {"user": user, "uuid": uid, "exp": exp, "ip": il, "quota": q}, ""
 
 
-def vless_delete(user):
-    u = find("v", user)
+def xray_delete(kind, user):
+    u = find(kind, user)
     if not u:
         return False, "Akaun tak jumpa."
+    K = KIND[kind]
+    D = K["dir"]
     _, exp, uid = u
 
     def edit():
-        with open(P("/etc/vless/akundelete"), "a") as f:
+        with open(P(D + "/akundelete"), "a") as f:
             f.write("### %s %s %s\n" % (user, exp, uid))
-        sed("/^#vl %s %s/,/^},{/d" % (user, exp))
-        sed("/^#vlg %s %s/,/^},{/d" % (user, exp))
+        sed("/^%s %s %s/,/^},{/d" % (K["m1"], user, exp))
+        sed("/^%s %s %s/,/^},{/d" % (K["m2"], user, exp))
 
-    os.makedirs(P("/etc/vless"), exist_ok=True)
+    os.makedirs(P(D), exist_ok=True)
     ok, err = guarded_config_edit(edit)
     if not ok:
         return False, err
-    for f in ("/etc/vless/%sIP" % user, "/etc/vless/%slogin" % user, "/etc/vless/%s" % user,
-              "/etc/vless/akun/%s" % user, "/home/vps/public_html/vless-%s.txt" % user,
-              "/etc/vless/nota/%s" % user):
+    for f in ("%s/%sIP" % (D, user), "%s/%slogin" % (D, user), "%s/%s" % (D, user), "%s/akun/%s" % (D, user),
+              "/home/vps/public_html/%s-%s.txt" % (K["pub"], user), "%s/nota/%s" % (D, user)):
         try:
             os.remove(P(f))
         except OSError:
@@ -451,16 +687,17 @@ def vless_delete(user):
     return True, ""
 
 
-def vless_renew(user, days):
-    u = find("v", user)
+def xray_renew(kind, user, days):
+    u = find(kind, user)
     if not u:
         return None, "Akaun tak jumpa."
+    K = KIND[kind]
     _, exp, _ = u
     exp4 = exp_after(days_left(exp) + days)
 
     def edit():
-        sed("s/#vl %s %s/#vl %s %s/g" % (user, exp, user, exp4))
-        sed("s/#vlg %s %s/#vlg %s %s/g" % (user, exp, user, exp4))
+        sed("s/%s %s %s/%s %s %s/g" % (K["m1"], user, exp, K["m1"], user, exp4))
+        sed("s/%s %s %s/%s %s %s/g" % (K["m2"], user, exp, K["m2"], user, exp4))
 
     ok, err = guarded_config_edit(edit)
     return (exp4, "") if ok else (None, err)
@@ -544,10 +781,15 @@ def ssh_renew(user, days):
 
 
 # ---------------------------------------------------------------- mesej
-def vless_info(user, uid, exp):
-    """Butiran akaun VLESS (baris HTML) untuk mesej bot."""
-    il = rd("/etc/vless/%sIP" % user, "")
-    qb = rd("/etc/vless/%s" % user, "")
+def acct_info(kind, user, uid, exp):
+    """Butiran akaun VLESS/VMess/Trojan (baris HTML) untuk mesej bot."""
+    D = KIND[kind]["dir"]
+    if kind == "t":
+        m = re.search(r"login_ip=(\d+)", rd("/etc/trojan/akun/%s" % user, ""))
+        il = m.group(1) if m else ""
+    else:
+        il = rd("%s/%sIP" % (D, user), "")
+    qb = rd("%s/%s" % (D, user), "")
     iplim = "tiada had" if il in ("", "0", "9999") else "%s IP" % il
     quota = "tiada had"
     if qb.isdigit():
@@ -555,24 +797,33 @@ def vless_info(user, uid, exp):
         if g not in (0, 9999):
             quota = "%d GB" % g
     t = ["User   : %s" % code(user)]
-    n = nota_get(user)
+    n = nota_get(user, kind)
     if n:
         t.append("Nota   : %s" % E(n))
     t += ["ISP    : %s" % E(rd("/etc/xray/isp", "-")), "Domain : %s" % code(domain()),
-          "Had IP : %s" % E(iplim), "Kuota  : %s" % E(quota), "UUID   : %s" % code(uid),
-          "Luput  : %s (%d hari)" % (E(exp), days_left(exp)),
-          "Port   : TLS 443, NTLS 80/8080, gRPC 443",
-          "Path   : /vless   gRPC: /vless-grpc", "Network: ws   Encryption: none"]
+          "Had IP : %s" % E(iplim), "Kuota  : %s" % E(quota),
+          ("Key    : %s" if kind == "t" else "UUID   : %s") % code(uid),
+          "Luput  : %s (%d hari)" % (E(exp), days_left(exp))]
+    if kind == "v":
+        t += ["Port   : TLS 443, NTLS 80/8080, gRPC 443", "Path   : /vless   gRPC: /vless-grpc",
+              "Network: ws   Encryption: none"]
+    elif kind == "m":
+        t += ["Port   : TLS 443, NTLS 80/8080, gRPC 443", "Path   : /vmess   gRPC: vmess-grpc",
+              "Network: ws   AlterId: 0"]
+    else:
+        t += ["Port   : TLS 443, gRPC 443", "Path   : /trojan-ws   gRPC: trojan-grpc", "Network: ws/grpc (TLS)"]
     return t
 
 
-def vless_msg(user, uid, exp, extra=""):
-    t = ["<b>VLESS siap</b>  ✦ kancil ecem"] + vless_info(user, uid, exp)
+def acct_msg(kind, user, uid, exp, extra=""):
+    K = KIND[kind]
+    t = ["<b>%s siap</b>  ✦ kancil ecem" % K["nama"]] + acct_info(kind, user, uid, exp)
     if extra:
         t.append(E(extra))
-    for lab, lk in vless_std_links(user, uid):
+    for lab, lk in std_links(kind, user, uid):
         t += ["", "<b>%s</b>" % E(lab), code(lk)]
-    t += ["", "OpenClash: " + code("http://%s:89/vless-%s.txt" % (domain(), user)), "", "Pilih telco untuk link tambahan:"]
+    t += ["", "OpenClash: " + code("http://%s:89/%s-%s.txt" % (domain(), K["pub"], user)), "",
+          "Pilih telco untuk link tambahan:"]
     return "\n".join(t)
 
 
@@ -583,12 +834,16 @@ def ssh_msg(user, pw, exp, ip):
 
 
 def list_msg():
-    v, s = vless_users(), ssh_users()
-    t = ["<b>VLESS (%d)</b>" % len(v)]
-    for u, e, _ in v:
-        n = nota_get(u)
-        t.append("%s  %s (%d hari)%s" % (code(u), E(e), days_left(e), (" · " + E(n)) if n else ""))
-    t += ["", "<b>SSH (%d)</b>" % len(s)]
+    t = []
+    for k in XKINDS:
+        us = xusers(k)
+        t.append("<b>%s (%d)</b>" % (KIND[k]["nama"], len(us)))
+        for u, e, _ in us:
+            n = nota_get(u, k)
+            t.append("%s  %s (%d hari)%s" % (code(u), E(e), days_left(e), (" · " + E(n)) if n else ""))
+        t.append("")
+    s = ssh_users()
+    t.append("<b>SSH (%d)</b>" % len(s))
     for u, e, _ in s:
         t.append("%s  %s (%d hari)" % (code(u), E(e), days_left(e)))
     return "\n".join(t)
@@ -601,13 +856,14 @@ def status_msg():
         t.append("%s %s" % ("✅" if a == "active" else "❌", svc))
     t.append("")
     t.append("Domain: %s" % code(domain()))
-    t.append("Akaun: VLESS %d, SSH %d" % (len(vless_users()), len(ssh_users())))
+    t.append("Akaun: VLESS %d, VMess %d, Trojan %d, SSH %d" % (
+        len(xusers("v")), len(xusers("m")), len(xusers("t")), len(ssh_users())))
     t += ["", "Developer by kancil ecem"]
     return "\n".join(t)
 
 
 def user_buttons(kind, prefix):
-    src = vless_users() if kind == "v" else ssh_users()
+    src = users_of(kind)
     b = [btn(u[0], "%s:%s:%s" % (prefix, kind, u[0])) for u in src[:90]]
     return rows(b, 2) + [[btn("Batal", "x")]]
 
@@ -641,9 +897,9 @@ def v_uuid(chat, s):
     if s.lower() == "auto":
         return True, None
     if not (UUID_RE.match(s) or UTXT_RE.match(s)):
-        return False, "UUID tak sah. Guna UUID biasa (8-4-4-4-12) atau teks 8-30 aksara (A-Z a-z 0-9 . _ -). Atau taip auto."
+        return False, "Tak sah. Guna UUID biasa (8-4-4-4-12) atau teks 8-30 aksara (A-Z a-z 0-9 . _ -). Atau taip auto."
     if ('"%s"' % s) in "\n".join(lines_of("/etc/xray/config.json")):
-        return False, "UUID tu dah dipakai. Cuba yang lain."
+        return False, "Tu dah dipakai. Cuba yang lain."
     return True, s
 
 
@@ -657,11 +913,18 @@ def v_nota(chat, s):
     return True, s
 
 
+def xflow(label, key):
+    return [("nama", "Nama akaun %s?" % label, v_name),
+            ("uuid", "%s custom? (taip auto untuk jana sendiri)" % key, v_uuid),
+            ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)),
+            ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)), ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999)),
+            ("nota", "Nota? (contoh nama pelanggan atau no. WhatsApp). Taip 0 kalau tiada", v_nota)]
+
+
 FLOWS = {
-    "vl": [("nama", "Nama akaun VLESS?", v_name),
-           ("uuid", "UUID custom? (taip auto untuk jana sendiri)", v_uuid), ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)),
-           ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)), ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999)),
-           ("nota", "Nota? (contoh nama pelanggan atau no. WhatsApp). Taip 0 kalau tiada", v_nota)],
+    "vl": xflow("VLESS", "UUID"),
+    "vm": xflow("VMess", "UUID"),
+    "tr": xflow("Trojan", "Password"),
     "nt": [("nota", "Nota baru? Taip 0 untuk padam nota.", v_nota)],
     "ss": [("nama", "Nama akaun SSH?", v_name), ("pw", "Kata laluan? (taip auto untuk jana sendiri)", v_pw),
            ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)), ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)),
@@ -679,13 +942,14 @@ def finish(chat, st):
     d = st["d"]
     flow = st["flow"]
     STATE.pop(chat, None)
-    if flow == "vl":
+    if flow in FLOWKIND:
+        kind = FLOWKIND[flow]
         send(chat, "Sekejap, cipta akaun...")
-        r, err = vless_create(d["nama"], d["hari"], d["ip"], d["gb"], d.get("uuid"), d.get("nota", ""))
+        r, err = xray_create(kind, d["nama"], d["hari"], d["ip"], d["gb"], d.get("uuid"), d.get("nota", ""))
         if not r:
             send(chat, E(err), MAIN_KB)
             return
-        send(chat, vless_msg(r["user"], r["uuid"], r["exp"]), telco_kb(r["user"]))
+        send(chat, acct_msg(kind, r["user"], r["uuid"], r["exp"]), telco_kb(r["user"], kind))
     elif flow == "ss":
         r, err = ssh_create(d["nama"], d["pw"], d["hari"], d["ip"], d["gb"])
         if not r:
@@ -693,19 +957,20 @@ def finish(chat, st):
             return
         send(chat, ssh_msg(r["user"], r["pw"], r["exp"], r["ip"]), MAIN_KB)
     elif flow == "nt":
-        u = find("v", d["user"])
+        kind = d.get("kind", "v")
+        u = find(kind, d["user"])
         if not u:
             send(chat, "Akaun tak jumpa.", MAIN_KB)
             return
-        nota_set(d["user"], d["nota"])
+        nota_set(d["user"], d["nota"], kind)
         send(chat, ("Nota %s disimpan." if d["nota"] else "Nota %s dipadam.") % code(d["user"]), MAIN_KB)
-        show_account(chat, "v", d["user"])
+        show_account(chat, kind, d["user"])
     elif flow == "rn":
         kind, user = d["kind"], d["user"]
-        if kind == "v":
-            exp, err = vless_renew(user, d["hari"])
-        else:
+        if kind == "s":
             exp, err = ssh_renew(user, d["hari"])
+        else:
+            exp, err = xray_renew(kind, user, d["hari"])
         if not exp:
             send(chat, E(err), MAIN_KB)
             return
@@ -734,9 +999,9 @@ def show_account(chat, kind, user):
     if not u:
         send(chat, "Akaun tak jumpa.", MAIN_KB)
         return
-    if kind == "v":
+    if kind in KIND:
         _, exp, uid = u
-        send(chat, vless_msg(user, uid, exp), telco_kb(user))
+        send(chat, acct_msg(kind, user, uid, exp), telco_kb(user, kind))
     else:
         _, exp, pw = u
         il = rd("/etc/xray/sshx/%sIP" % user, "0")
@@ -744,7 +1009,7 @@ def show_account(chat, kind, user):
 
 
 def kinds_of(name):
-    return [k for k in ("v", "s") if find(k, name)]
+    return [k for k in ("v", "m", "t", "s") if find(k, name)]
 
 
 def ask_kind(chat, name, prefix, label):
@@ -754,9 +1019,30 @@ def ask_kind(chat, name, prefix, label):
         return None
     if len(ks) == 1:
         return ks[0]
-    send(chat, "%s ada dalam VLESS dan SSH. %s yang mana?" % (code(name), label),
-         [[btn("VLESS", "%s:v:%s" % (prefix, name)), btn("SSH", "%s:s:%s" % (prefix, name))]])
+    send(chat, "%s ada dalam %s. %s yang mana?" % (code(name), ", ".join(kname(k) for k in ks), label),
+         rows([btn(kname(k), "%s:%s:%s" % (prefix, k, name)) for k in ks], 2))
     return None
+
+
+def quick_create(chat, kind, a):
+    """/vless /vmess /trojan nama hari [ip] [gb] [uuid] [nota]"""
+    flow = {"v": "vl", "m": "vm", "t": "tr"}[kind]
+    if len(a) < 2:
+        start_flow(chat, flow)
+        return
+    d = {}
+    vals = a + ["0", "0"][:max(0, 4 - len(a))]
+    ok1, d["nama"] = v_name(chat, vals[0])
+    ok2, d["hari"] = v_int(1, 3650)(chat, vals[1])
+    ok3, d["ip"] = v_int(0, 9999)(chat, vals[2])
+    ok4, d["gb"] = v_int(0, 9999)(chat, vals[3])
+    ok5, d["uuid"] = v_uuid(chat, a[4] if len(a) >= 5 else "auto")
+    ok6, d["nota"] = v_nota(chat, " ".join(a[5:]))
+    bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"]), (ok5, d["uuid"]), (ok6, d["nota"])) if not ok]
+    if bad:
+        send(chat, E(bad[0]))
+        return
+    finish(chat, {"flow": flow, "d": d})
 
 
 def on_command(chat, text):
@@ -770,8 +1056,10 @@ def on_command(chat, text):
         send(chat, "\n".join([
             "<b>Arahan</b>", "/menu - butang utama",
             "/vless nama hari [ip] [gb] [uuid] [nota] - cipta VLESS terus (uuid custom: letak 0 0 dulu, tak nak uuid custom: letak auto)",
-            "/nota nama [teks] - lihat atau tukar nota akaun VLESS (0 = padam)",
+            "/vmess nama hari [ip] [gb] [uuid] [nota] - cipta VMess terus",
+            "/trojan nama hari [ip] [gb] [password] [nota] - cipta Trojan terus",
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
+            "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
@@ -781,23 +1069,8 @@ def on_command(chat, text):
         send(chat, list_msg(), MAIN_KB)
     elif cmd == "/status":
         send(chat, status_msg(), MAIN_KB)
-    elif cmd == "/vless":
-        if len(a) >= 2:
-            d = {}
-            vals = a + ["0", "0"][:max(0, 4 - len(a))]
-            ok1, d["nama"] = v_name(chat, vals[0])
-            ok2, d["hari"] = v_int(1, 3650)(chat, vals[1])
-            ok3, d["ip"] = v_int(0, 9999)(chat, vals[2])
-            ok4, d["gb"] = v_int(0, 9999)(chat, vals[3])
-            ok5, d["uuid"] = v_uuid(chat, a[4] if len(a) >= 5 else "auto")
-            ok6, d["nota"] = v_nota(chat, " ".join(a[5:]))
-            bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"]), (ok5, d["uuid"]), (ok6, d["nota"])) if not ok]
-            if bad:
-                send(chat, E(bad[0]))
-                return
-            finish(chat, {"flow": "vl", "d": d})
-        else:
-            start_flow(chat, "vl")
+    elif cmd in ("/vless", "/vmess", "/trojan"):
+        quick_create(chat, {"/vless": "v", "/vmess": "m", "/trojan": "t"}[cmd], a)
     elif cmd == "/ssh":
         if len(a) >= 3:
             d = {}
@@ -814,19 +1087,20 @@ def on_command(chat, text):
         else:
             start_flow(chat, "ss")
     elif cmd == "/nota":
+        ks = [k for k in kinds_of(a[0]) if k in KIND] if a else []
         if not a:
             send(chat, "Guna: /nota nama teks  (tukar nota) | /nota nama  (lihat) | /nota nama 0  (padam)")
-        elif not find("v", a[0]):
-            send(chat, "Akaun VLESS %s tak jumpa." % code(a[0]))
+        elif not ks:
+            send(chat, "Akaun VLESS, VMess atau Trojan %s tak jumpa." % code(a[0]))
         elif len(a) == 1:
-            n = nota_get(a[0])
+            n = nota_get(a[0], ks[0])
             send(chat, ("Nota %s: %s" % (code(a[0]), E(n))) if n else "Tiada nota untuk %s." % code(a[0]))
         else:
             ok, v = v_nota(chat, " ".join(a[1:]))
             if not ok:
                 send(chat, E(v))
             else:
-                nota_set(a[0], v)
+                nota_set(a[0], v, ks[0])
                 send(chat, ("Nota %s disimpan: %s" % (code(a[0]), E(v))) if v else "Nota %s dipadam." % code(a[0]), MAIN_KB)
     elif cmd == "/semak" and a:
         k = ask_kind(chat, a[0], "c", "Semak")
@@ -835,7 +1109,7 @@ def on_command(chat, text):
     elif cmd == "/padam" and a:
         k = ask_kind(chat, a[0], "d", "Padam")
         if k:
-            send(chat, "Padam %s (%s)?" % (code(a[0]), "VLESS" if k == "v" else "SSH"),
+            send(chat, "Padam %s (%s)?" % (code(a[0]), kname(k)),
                  [[btn("Ya, padam", "D:%s:%s" % (k, a[0])), btn("Batal", "x")]])
     elif cmd == "/renew" and len(a) >= 2:
         ok, days = v_int(1, 3650)(chat, a[1])
@@ -855,44 +1129,49 @@ def on_command(chat, text):
 def on_callback(chat, data):
     p = data.split(":", 2)
     k = p[0]
+    KS = ("v", "m", "t", "s")
     if k == "x":
         STATE.pop(chat, None)
         send(chat, "Batal.", MAIN_KB)
-    elif k == "m":
+    elif k == "m" and len(p) >= 2:
         what = p[1]
-        if what == "vl":
-            start_flow(chat, "vl")
-        elif what == "ss":
-            start_flow(chat, "ss")
+        if what in ("vl", "vm", "tr", "ss"):
+            start_flow(chat, what)
         elif what == "ls":
             send(chat, list_msg(), MAIN_KB)
         elif what == "st":
             send(chat, status_msg(), MAIN_KB)
         elif what in ("ck", "dl", "rn"):
-            send(chat, "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
-    elif k in ("ck", "dl", "rn") and len(p) == 2:
+            send(chat, "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("VMess", "%s:m" % what)],
+                                        [btn("Trojan", "%s:t" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
+    elif k in ("ck", "dl", "rn") and len(p) == 2 and p[1] in KS:
         pre = {"ck": "c", "dl": "d", "rn": "r"}[k]
         kb = user_buttons(p[1], pre)
         send(chat, "Pilih akaun:" if len(kb) > 1 else "Tiada akaun.", kb if len(kb) > 1 else MAIN_KB)
-    elif k == "c" and len(p) == 3:
+    elif k == "c" and len(p) == 3 and p[1] in KS:
         show_account(chat, p[1], p[2])
-    elif k == "d" and len(p) == 3:
-        send(chat, "Padam %s (%s)?" % (code(p[2]), "VLESS" if p[1] == "v" else "SSH"),
+    elif k == "d" and len(p) == 3 and p[1] in KS:
+        send(chat, "Padam %s (%s)?" % (code(p[2]), kname(p[1])),
              [[btn("Ya, padam", "D:%s:%s" % (p[1], p[2])), btn("Batal", "x")]])
-    elif k == "D" and len(p) == 3:
-        ok, err = vless_delete(p[2]) if p[1] == "v" else ssh_delete(p[2])
+    elif k == "D" and len(p) == 3 and p[1] in KS:
+        ok, err = ssh_delete(p[2]) if p[1] == "s" else xray_delete(p[1], p[2])
         send(chat, ("Dah dipadam: %s" % code(p[2])) if ok else E(err), MAIN_KB)
-    elif k == "r" and len(p) == 3:
+    elif k == "r" and len(p) == 3 and p[1] in KS:
         start_flow(chat, "rn", {"kind": p[1], "user": p[2]})
     elif k == "n" and len(p) >= 2:
-        if not find("v", p[1]):
+        if len(p) == 3 and p[1] in XKINDS:
+            kind, user = p[1], p[2]
+        else:
+            kind, user = "v", ":".join(p[1:])
+        if not find(kind, user):
             send(chat, "Akaun tak jumpa.", MAIN_KB)
             return
-        start_flow(chat, "nt", {"user": p[1]})
-    elif k == "t":
+        start_flow(chat, "nt", {"kind": kind, "user": user})
+    elif k in ("t", "tm", "tt"):
+        kind = {"t": "v", "tm": "m", "tt": "t"}[k]
         q = data.split(":")
         user, n = q[1], int(q[2]) if len(q) > 2 and q[2].isdigit() else 0
-        u = find("v", user)
+        u = find(kind, user)
         if not u:
             send(chat, "Akaun tak jumpa.", MAIN_KB)
             return
@@ -901,10 +1180,10 @@ def on_callback(chat, data):
         if not sel:
             send(chat, "Telco tak ada.", MAIN_KB)
             return
-        out = ["<b>Akaun VLESS</b>"] + vless_info(user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
+        out = ["<b>Akaun %s</b>" % KIND[kind]["nama"]] + acct_info(kind, user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
         for t in sel:
-            out += ["<b>%s</b>" % E(t[0]), code(telco_link(u[2], user, t)), ""]
-        send(chat, "\n".join(out).rstrip(), telco_kb(user))
+            out += ["<b>%s</b>" % E(t[0]), code(telco_link(u[2], user, t, kind)), ""]
+        send(chat, "\n".join(out).rstrip(), telco_kb(user, kind))
 
 
 def handle(u):
@@ -929,8 +1208,12 @@ def handle(u):
     if msg["chat"].get("type") != "private":
         return
     if uid not in ADMINS:
-        if text.startswith("/start"):
-            send(chat, "Tiada akses.\nID Telegram kau: %s" % code(uid))
+        # senyap: orang asing tak dapat balasan langsung. Cuma catat sekali setiap ID dalam log.
+        if uid not in SEEN:
+            if len(SEEN) > 1000:
+                SEEN.clear()
+            SEEN.add(uid)
+            log("akses ditolak, ID:", uid)
         return
     if text.startswith("/"):
         on_command(chat, text)
