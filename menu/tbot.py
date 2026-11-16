@@ -191,6 +191,24 @@ def name_taken(name):
     return run(["id", name]).returncode == 0
 
 
+def nota_get(user):
+    return rd("/etc/vless/nota/%s" % user, "")
+
+
+def nota_set(user, text):
+    p = P("/etc/vless/nota/%s" % user)
+    text = (text or "").strip()
+    if not text:
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+        return
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        f.write(text + "\n")
+
+
 def find(kind, name):
     src = vless_users() if kind == "v" else ssh_users()
     for u in src:
@@ -279,7 +297,7 @@ def telco_link(uid, user, t):
 def telco_kb(user):
     b = [btn(t[0], "t:%s:%d" % (user, i + 1)) for i, t in enumerate(telcos())]
     kb = rows(b, 3)
-    kb.append([btn("Semua telco", "t:%s:0" % user)])
+    kb.append([btn("Semua telco", "t:%s:0" % user), btn("📝 Nota", "n:%s" % user)])
     return kb
 
 
@@ -361,7 +379,7 @@ _______________________________
            l3=vless_std_links(user, uid)[2][1])
 
 
-def vless_create(user, days, iplim, quota, custom_uuid=None):
+def vless_create(user, days, iplim, quota, custom_uuid=None, nota=""):
     uid = custom_uuid or str(uuidlib.uuid4())
     exp = exp_after(days)
 
@@ -375,6 +393,7 @@ def vless_create(user, days, iplim, quota, custom_uuid=None):
     q = quota or 9999
     il = iplim or 9999
     os.makedirs(P("/etc/vless/akun"), exist_ok=True)
+    nota_set(user, nota)
     with open(P("/etc/vless/%s" % user), "w") as f:
         f.write("%d\n" % (q * 1024 ** 3))
     with open(P("/etc/vless/%sIP" % user), "w") as f:
@@ -387,8 +406,11 @@ def vless_create(user, days, iplim, quota, custom_uuid=None):
             user, q, time.strftime("%H:%M:%S.000000000")))
     d = domain()
     L = [" ◇━━━━━━━━━━━━━━━━━◇", " • Premium Vless Account •", " ◇━━━━━━━━━━━━━━━━━◇",
-         " User         : %s" % user, " ISP          : %s" % rd("/etc/xray/isp"), " City         : %s" % rd("/etc/xray/city"),
-         " Domain       : %s" % d, " Login Limit  : %d IP" % il]
+         " User         : %s" % user]
+    if nota:
+        L.append(" Nota         : %s" % nota)
+    L += [" ISP          : %s" % rd("/etc/xray/isp"), " City         : %s" % rd("/etc/xray/city"),
+          " Domain       : %s" % d, " Login Limit  : %d IP" % il]
     if q != 9999:
         L.append(" Quota Limit  : %d GB" % q)
     L += [" Port TLS     : 443", " Port NTLS    : 80,8080", " Port gRPC    : 443", " UUID         : %s" % uid,
@@ -420,7 +442,8 @@ def vless_delete(user):
     if not ok:
         return False, err
     for f in ("/etc/vless/%sIP" % user, "/etc/vless/%slogin" % user, "/etc/vless/%s" % user,
-              "/etc/vless/akun/%s" % user, "/home/vps/public_html/vless-%s.txt" % user):
+              "/etc/vless/akun/%s" % user, "/home/vps/public_html/vless-%s.txt" % user,
+              "/etc/vless/nota/%s" % user):
         try:
             os.remove(P(f))
         except OSError:
@@ -521,9 +544,30 @@ def ssh_renew(user, days):
 
 
 # ---------------------------------------------------------------- mesej
+def vless_info(user, uid, exp):
+    """Butiran akaun VLESS (baris HTML) untuk mesej bot."""
+    il = rd("/etc/vless/%sIP" % user, "")
+    qb = rd("/etc/vless/%s" % user, "")
+    iplim = "tiada had" if il in ("", "0", "9999") else "%s IP" % il
+    quota = "tiada had"
+    if qb.isdigit():
+        g = int(qb) // 1024 ** 3
+        if g not in (0, 9999):
+            quota = "%d GB" % g
+    t = ["User   : %s" % code(user)]
+    n = nota_get(user)
+    if n:
+        t.append("Nota   : %s" % E(n))
+    t += ["ISP    : %s" % E(rd("/etc/xray/isp", "-")), "Domain : %s" % code(domain()),
+          "Had IP : %s" % E(iplim), "Kuota  : %s" % E(quota), "UUID   : %s" % code(uid),
+          "Luput  : %s (%d hari)" % (E(exp), days_left(exp)),
+          "Port   : TLS 443, NTLS 80/8080, gRPC 443",
+          "Path   : /vless   gRPC: /vless-grpc", "Network: ws   Encryption: none"]
+    return t
+
+
 def vless_msg(user, uid, exp, extra=""):
-    t = ["<b>VLESS siap</b>  ✦ kancil ecem", "User   : %s" % code(user), "UUID   : %s" % code(uid),
-         "Luput  : %s (%d hari)" % (E(exp), days_left(exp))]
+    t = ["<b>VLESS siap</b>  ✦ kancil ecem"] + vless_info(user, uid, exp)
     if extra:
         t.append(E(extra))
     for lab, lk in vless_std_links(user, uid):
@@ -542,7 +586,8 @@ def list_msg():
     v, s = vless_users(), ssh_users()
     t = ["<b>VLESS (%d)</b>" % len(v)]
     for u, e, _ in v:
-        t.append("%s  %s (%d hari)" % (code(u), E(e), days_left(e)))
+        n = nota_get(u)
+        t.append("%s  %s (%d hari)%s" % (code(u), E(e), days_left(e), (" · " + E(n)) if n else ""))
     t += ["", "<b>SSH (%d)</b>" % len(s)]
     for u, e, _ in s:
         t.append("%s  %s (%d hari)" % (code(u), E(e), days_left(e)))
@@ -602,10 +647,22 @@ def v_uuid(chat, s):
     return True, s
 
 
+def v_nota(chat, s):
+    s = re.sub(r"[\x00-\x1f\x7f]", " ", s)
+    s = " ".join(s.split())
+    if s.lower() in ("0", "-", "tiada"):
+        return True, ""
+    if len(s) > 100:
+        return False, "Nota terlalu panjang (maks 100 aksara). Ringkaskan, atau taip 0 kalau tiada."
+    return True, s
+
+
 FLOWS = {
     "vl": [("nama", "Nama akaun VLESS?", v_name),
            ("uuid", "UUID custom? (taip auto untuk jana sendiri)", v_uuid), ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)),
-           ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)), ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999))],
+           ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)), ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999)),
+           ("nota", "Nota? (contoh nama pelanggan atau no. WhatsApp). Taip 0 kalau tiada", v_nota)],
+    "nt": [("nota", "Nota baru? Taip 0 untuk padam nota.", v_nota)],
     "ss": [("nama", "Nama akaun SSH?", v_name), ("pw", "Kata laluan? (taip auto untuk jana sendiri)", v_pw),
            ("hari", "Berapa hari? (contoh 30)", v_int(1, 3650)), ("ip", "Had IP? (0 = tiada had)", v_int(0, 9999)),
            ("gb", "Kuota GB? (0 = tiada had)", v_int(0, 9999))],
@@ -624,7 +681,7 @@ def finish(chat, st):
     STATE.pop(chat, None)
     if flow == "vl":
         send(chat, "Sekejap, cipta akaun...")
-        r, err = vless_create(d["nama"], d["hari"], d["ip"], d["gb"], d.get("uuid"))
+        r, err = vless_create(d["nama"], d["hari"], d["ip"], d["gb"], d.get("uuid"), d.get("nota", ""))
         if not r:
             send(chat, E(err), MAIN_KB)
             return
@@ -635,6 +692,14 @@ def finish(chat, st):
             send(chat, E(err), MAIN_KB)
             return
         send(chat, ssh_msg(r["user"], r["pw"], r["exp"], r["ip"]), MAIN_KB)
+    elif flow == "nt":
+        u = find("v", d["user"])
+        if not u:
+            send(chat, "Akaun tak jumpa.", MAIN_KB)
+            return
+        nota_set(d["user"], d["nota"])
+        send(chat, ("Nota %s disimpan." if d["nota"] else "Nota %s dipadam.") % code(d["user"]), MAIN_KB)
+        show_account(chat, "v", d["user"])
     elif flow == "rn":
         kind, user = d["kind"], d["user"]
         if kind == "v":
@@ -704,7 +769,8 @@ def on_command(chat, text):
     elif cmd == "/bantuan":
         send(chat, "\n".join([
             "<b>Arahan</b>", "/menu - butang utama",
-            "/vless nama hari [ip] [gb] [uuid] - cipta VLESS terus (uuid custom: letak 0 0 dulu)",
+            "/vless nama hari [ip] [gb] [uuid] [nota] - cipta VLESS terus (uuid custom: letak 0 0 dulu, tak nak uuid custom: letak auto)",
+            "/nota nama [teks] - lihat atau tukar nota akaun VLESS (0 = padam)",
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/batal - berhenti soalan"]))
@@ -724,7 +790,8 @@ def on_command(chat, text):
             ok3, d["ip"] = v_int(0, 9999)(chat, vals[2])
             ok4, d["gb"] = v_int(0, 9999)(chat, vals[3])
             ok5, d["uuid"] = v_uuid(chat, a[4] if len(a) >= 5 else "auto")
-            bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"]), (ok5, d["uuid"])) if not ok]
+            ok6, d["nota"] = v_nota(chat, " ".join(a[5:]))
+            bad = [x for ok, x in ((ok1, d["nama"]), (ok2, d["hari"]), (ok3, d["ip"]), (ok4, d["gb"]), (ok5, d["uuid"]), (ok6, d["nota"])) if not ok]
             if bad:
                 send(chat, E(bad[0]))
                 return
@@ -746,6 +813,21 @@ def on_command(chat, text):
             finish(chat, {"flow": "ss", "d": d})
         else:
             start_flow(chat, "ss")
+    elif cmd == "/nota":
+        if not a:
+            send(chat, "Guna: /nota nama teks  (tukar nota) | /nota nama  (lihat) | /nota nama 0  (padam)")
+        elif not find("v", a[0]):
+            send(chat, "Akaun VLESS %s tak jumpa." % code(a[0]))
+        elif len(a) == 1:
+            n = nota_get(a[0])
+            send(chat, ("Nota %s: %s" % (code(a[0]), E(n))) if n else "Tiada nota untuk %s." % code(a[0]))
+        else:
+            ok, v = v_nota(chat, " ".join(a[1:]))
+            if not ok:
+                send(chat, E(v))
+            else:
+                nota_set(a[0], v)
+                send(chat, ("Nota %s disimpan: %s" % (code(a[0]), E(v))) if v else "Nota %s dipadam." % code(a[0]), MAIN_KB)
     elif cmd == "/semak" and a:
         k = ask_kind(chat, a[0], "c", "Semak")
         if k:
@@ -802,6 +884,11 @@ def on_callback(chat, data):
         send(chat, ("Dah dipadam: %s" % code(p[2])) if ok else E(err), MAIN_KB)
     elif k == "r" and len(p) == 3:
         start_flow(chat, "rn", {"kind": p[1], "user": p[2]})
+    elif k == "n" and len(p) >= 2:
+        if not find("v", p[1]):
+            send(chat, "Akaun tak jumpa.", MAIN_KB)
+            return
+        start_flow(chat, "nt", {"user": p[1]})
     elif k == "t":
         q = data.split(":")
         user, n = q[1], int(q[2]) if len(q) > 2 and q[2].isdigit() else 0
@@ -814,7 +901,7 @@ def on_callback(chat, data):
         if not sel:
             send(chat, "Telco tak ada.", MAIN_KB)
             return
-        out = []
+        out = ["<b>Akaun VLESS</b>"] + vless_info(user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
         for t in sel:
             out += ["<b>%s</b>" % E(t[0]), code(telco_link(u[2], user, t)), ""]
         send(chat, "\n".join(out).rstrip(), telco_kb(user))
