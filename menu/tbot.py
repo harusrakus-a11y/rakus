@@ -4,11 +4,14 @@
 import base64
 import copy
 import datetime
+import functools
+import hashlib
 import html
 import json
 import os
 import re
 import secrets
+import shlex
 import shutil
 import string
 import subprocess
@@ -93,6 +96,8 @@ def chunk(text, limit=3800):
 
 
 def send(chat, text, kb=None):
+    if kb is MAIN_KB:
+        kb = main_kb(chat)
     parts = chunk(text)
     for i, part in enumerate(parts):
         p = {"chat_id": chat, "text": part, "parse_mode": "HTML", "disable_web_page_preview": True}
@@ -150,6 +155,271 @@ def run(cmd, inp=None, timeout=90):
     return subprocess.run(cmd, input=inp, capture_output=True, text=True, timeout=timeout)
 
 
+# ---------------------------------------------------------------- banyak VPS
+# Bot ni satu sahaja dan hidup kat server Utama ("local"). Server lain dihubungi guna SSH: bot hantar arahan kepada
+# salinan tbot.py ("ejen") kat server tu, dan ejen jalankan fungsi yang sama kat sana. Token Telegram tak pernah keluar
+# dari server Utama. Daftar server: /etc/tbot/vps.json. Kunci SSH bot: /etc/tbot/id_ed25519.
+VPS_F = "/etc/tbot/vps.json"
+VPS_KEY = "/etc/tbot/id_ed25519"
+VPS_KH = "/etc/tbot/known_hosts"
+AGENT = "/usr/local/lib/tbot-agent.py"
+RPC_VER = 1
+VID_RE = re.compile(r"^[a-z][a-z0-9]{0,5}$")
+VNAMA_RE = re.compile(r"^[A-Za-z0-9_-]{1,20}$")
+HOST_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{1,100}$")
+CUR = "local"
+RPC = {}
+DOWN = {}
+_LOOP = os.environ.get("TBOT_LOOPBACK") == "1"   # cuma untuk ujian: server Utama pun dihubungi lalu ejen (uji semua laluan JSON)
+
+
+class VPSError(Exception):
+    pass
+
+
+def _baca_diri():
+    try:
+        with open(os.path.abspath(__file__), "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
+_SRC = _baca_diri()   # kod yang sedang jalan (dihantar kepada ejen supaya sentiasa sama dengan bot)
+MYSHA = hashlib.sha256(_SRC).hexdigest()[:16]
+
+
+def vps_load():
+    d = {"seq": 1, "v": [], "local": {"nama": "Utama", "buka": True}, "pilih": {}}
+    try:
+        with open(P(VPS_F)) as f:
+            j = json.load(f)
+        if isinstance(j, dict):
+            d.update(j)
+    except (OSError, ValueError):
+        pass
+    if not isinstance(d.get("v"), list):
+        d["v"] = []
+    d["v"] = [v for v in d["v"] if isinstance(v, dict) and VID_RE.match(str(v.get("id", ""))) and v.get("host")]
+    if not isinstance(d.get("local"), dict):
+        d["local"] = {"nama": "Utama", "buka": True}
+    if not isinstance(d.get("pilih"), dict):
+        d["pilih"] = {}
+    return d
+
+
+def vps_save(d):
+    p = P(VPS_F)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(d, f)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, p)
+
+
+def vps_semua(d=None):
+    d = d or vps_load()
+    lc = d["local"]
+    out = [{"id": "local", "nama": lc.get("nama") or "Utama", "buka": lc.get("buka", True), "host": "", "port": 22}]
+    for v in d["v"]:
+        out.append({"id": v["id"], "nama": v.get("nama") or v["id"], "buka": v.get("buka", True),
+                    "host": v.get("host", ""), "port": int(v.get("port", 22) or 22)})
+    return out
+
+
+def vps_get(vid, d=None):
+    for v in vps_semua(d):
+        if v["id"] == vid:
+            return v
+    return None
+
+
+def vps_nama(vid):
+    v = vps_get(vid)
+    return v["nama"] if v else vid
+
+
+def vps_multi():
+    return bool(vps_load()["v"])
+
+
+def vps_dibuka(vid):
+    v = vps_get(vid)
+    return bool(v and v["buka"])
+
+
+def vps_buka_list():
+    return [v for v in vps_semua() if v["buka"]]
+
+
+def vps_pilih_get(chat, d=None):
+    d = d or vps_load()
+    vid = d["pilih"].get(str(chat), "local")
+    return vid if vps_get(vid, d) else "local"
+
+
+def vsplit(tok):
+    """'ali@v2' -> ('ali', 'v2'). Tanpa @ = server Utama."""
+    if "@" in tok:
+        u, v = tok.rsplit("@", 1)
+        if u and VID_RE.match(v):
+            return u, v
+    return tok, "local"
+
+
+def vsuf(vid=None):
+    vid = vid or CUR
+    return "" if vid == "local" else "@" + vid
+
+
+def vtok(vid):
+    return "" if vid == "local" else ":" + vid
+
+
+def akey(kind, user, vid):
+    return "%s:%s%s" % (kind, user, vsuf(vid))
+
+
+def vtag(vid):
+    return (" • Server: %s" % E(vps_nama(vid))) if vps_multi() else ""
+
+
+def vlabel(vid):
+    return (" · %s" % vps_nama(vid)) if vps_multi() else ""
+
+
+def vhead():
+    return ("🖥 <b>%s</b>\n" % E(vps_nama(CUR))) if vps_multi() else ""
+
+
+class on:
+    """with on(vid): semua kerja akaun dalam blok ni dibuat kat server vid."""
+
+    def __init__(self, vid):
+        self.vid = vid or "local"
+
+    def __enter__(self):
+        global CUR
+        self.old = CUR
+        CUR = self.vid
+
+    def __exit__(self, *e):
+        global CUR
+        CUR = self.old
+
+
+def remote(fn):
+    """Fungsi yang sentuh fail atau arahan server: kalau sasaran bukan Utama, dijalankan kat ejen server tu."""
+    RPC[fn.__name__] = fn
+
+    @functools.wraps(fn)
+    def w(*a, **k):
+        if CUR == "local" and not _LOOP:
+            return fn(*a, **k)
+        return rpc_call(CUR, fn.__name__, list(a), k)
+    return w
+
+
+def ssh_run(v, cmd, inp=b"", timeout=60):
+    a = [os.environ.get("TBOT_SSH", "ssh"), "-T", "-i", P(VPS_KEY), "-p", str(v.get("port", 22)),
+         "-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
+         "-o", "UserKnownHostsFile=" + P(VPS_KH), "-o", "ConnectTimeout=8",
+         "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3", "-o", "LogLevel=ERROR",
+         "root@" + v["host"], cmd]
+    try:
+        r = subprocess.run(a, input=inp, capture_output=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise VPSError("server lambat balas (lebih %d saat)" % timeout)
+    except OSError:
+        raise VPSError("arahan ssh tak ada. Jalankan: apt install -y openssh-client")
+    return r.returncode, r.stdout.decode("utf-8", "replace"), r.stderr.decode("utf-8", "replace")
+
+
+def _ralat_ssh(err):
+    e = " ".join((err or "").split())
+    if "host key verification failed" in e.lower() or "host identification has changed" in e.lower():
+        return "kunci host VPS tu berubah (VPS dipasang semula?). Buang dengan /vpsbuang ID ya, kemudian tambah semula"
+    return e[:140] or "tiada jawapan"
+
+
+def agent_push(v):
+    """Pasang atau kemas kini salinan tbot.py (ejen) kat server tu."""
+    src = _SRC
+    if not src:
+        raise VPSError("tak dapat baca tbot.py sendiri")
+    cmd = ("mkdir -p %s && cat > %s.new && python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' %s.new && mv -f %s.new %s"
+           % (os.path.dirname(AGENT), AGENT, AGENT, AGENT, AGENT))
+    rc, out, err = ssh_run(v, cmd, src, 60)
+    if rc == 255:
+        DOWN[v.get("id")] = time.time()
+        raise VPSError("tak dapat sambung: " + _ralat_ssh(err))
+    if rc != 0:
+        raise VPSError("gagal pasang ejen kat server (kod %d): %s" % (rc, _ralat_ssh(err) if err.strip() else "python3 ada?"))
+
+
+def rpc_call_v(v, fn, a, k, retry=True):
+    req = json.dumps({"fn": fn, "a": a, "k": k, "sha": MYSHA, "ver": RPC_VER}).encode()
+    rc, out, err = ssh_run(v, "python3 %s --rpc" % AGENT, req, 45)
+    if rc == 255:
+        DOWN[v.get("id")] = time.time()
+        raise VPSError("tak dapat sambung: " + _ralat_ssh(err))
+    m = re.search(r"@@TBOT@@(.*?)@@END@@", out, re.S)
+    if not m:
+        if retry and rc == 2 and "can't open file" in err:
+            agent_push(v)
+            return rpc_call_v(v, fn, a, k, False)
+        if rc == 127:
+            raise VPSError("python3 tak ada kat server tu (apt install -y python3)")
+        raise VPSError("jawapan server tak betul (kod %d): %s" % (rc, _ralat_ssh(err)))
+    try:
+        j = json.loads(m.group(1))
+    except ValueError:
+        raise VPSError("jawapan server rosak")
+    if j.get("stale"):
+        if not retry:
+            raise VPSError("versi ejen tak sama dengan bot")
+        agent_push(v)
+        return rpc_call_v(v, fn, a, k, False)
+    DOWN.pop(v.get("id"), None)
+    if not j.get("ok"):
+        raise VPSError("ralat kat server: %s" % j.get("err", "?"))
+    return j.get("r")
+
+
+def rpc_call(vid, fn, a, k):
+    v = vps_get(vid)
+    if _LOOP and vid == "local" and v:
+        v = dict(v, host="10.0.0.9")
+    if not v or (vid == "local" and not _LOOP):
+        raise VPSError("server %s tak wujud (mungkin dah dibuang)" % vid)
+    if time.time() - DOWN.get(vid, 0) < 30:
+        raise VPSError("server %s tak dapat dihubungi sekarang" % v["nama"])
+    return rpc_call_v(v, fn, a, k)
+
+
+def rpc_main():
+    """Mod ejen: python3 tbot.py --rpc. Baca satu arahan JSON dari stdin, jalankan, cetak jawapan JSON."""
+    real = sys.stdout
+    sys.stdout = sys.stderr
+    try:
+        req = json.loads(sys.stdin.read())
+        if req.get("sha") != MYSHA:
+            out = {"stale": True}
+        else:
+            fn = RPC.get(req.get("fn"))
+            if fn is None:
+                raise ValueError("fungsi tak dikenali: %s" % req.get("fn"))
+            out = {"ok": True, "r": fn(*req.get("a", []), **req.get("k", {}))}
+        txt = json.dumps(out)
+    except Exception as e:
+        txt = json.dumps({"ok": False, "err": "%s: %s" % (type(e).__name__, e)})
+    sys.stdout = real
+    sys.stdout.write("\n@@TBOT@@" + txt + "@@END@@\n")
+    sys.stdout.flush()
+
+
+@remote
 def domain():
     return rd("/etc/xray/domain", "domain-tiada")
 
@@ -182,6 +452,7 @@ def kname(kind):
     return KIND[kind]["nama"] if kind in KIND else "SSH"
 
 
+@remote
 def xusers(kind):
     out = []
     mk = KIND[kind]["lst"] + " "
@@ -197,6 +468,7 @@ def vless_users():
     return xusers("v")
 
 
+@remote
 def ssh_users():
     out = []
     for line in lines_of("/etc/xray/ssh"):
@@ -207,10 +479,12 @@ def ssh_users():
     return out
 
 
+@remote
 def users_of(kind):
     return ssh_users() if kind == "s" else xusers(kind)
 
 
+@remote
 def name_taken(name):
     allu = ssh_users()
     for k in XKINDS:
@@ -222,10 +496,12 @@ def name_taken(name):
     return run(["id", name]).returncode == 0
 
 
+@remote
 def nota_get(user, kind="v"):
     return rd("%s/nota/%s" % (KIND[kind]["dir"], user), "")
 
 
+@remote
 def nota_set(user, text, kind="v"):
     p = P("%s/nota/%s" % (KIND[kind]["dir"], user))
     text = (text or "").strip()
@@ -240,11 +516,28 @@ def nota_set(user, text, kind="v"):
         f.write(text + "\n")
 
 
+@remote
 def find(kind, name):
     for u in users_of(kind):
         if u[0] == name:
             return u
     return None
+
+
+@remote
+def find_many(prs):
+    return [find(k, u) for k, u in prs]
+
+
+@remote
+def uuid_dipakai(s):
+    return ('"%s"' % s) in "\n".join(lines_of("/etc/xray/config.json"))
+
+
+@remote
+def ssh_iplimit(user):
+    il = rd("/etc/xray/sshx/%sIP" % user, "0")
+    return int(il) if il.isdigit() else 0
 
 
 # ---------------------------------------------------------------- config xray (dengan jaga-jaga)
@@ -286,9 +579,20 @@ def sed(expr):
 # ---------------------------------------------------------------- telco
 def telco_refresh(force=False):
     global _telco_time
+    stamp = TELCO + ".chk"
+    if not _telco_time:
+        try:
+            _telco_time = os.path.getmtime(stamp)
+        except OSError:
+            pass
     if not force and time.time() - _telco_time < 300 and os.path.exists(TELCO):
         return
     _telco_time = time.time()
+    try:
+        os.makedirs(os.path.dirname(TELCO), exist_ok=True)
+        open(stamp, "w").close()
+    except OSError:
+        pass
     try:
         with urllib.request.urlopen(TELCO_URL, timeout=8) as r:
             txt = r.read().decode("utf-8", "replace")
@@ -304,6 +608,7 @@ def telco_refresh(force=False):
             f.write(TELCO_DEFAULT)
 
 
+@remote
 def telcos():
     telco_refresh()
     out = []
@@ -313,6 +618,12 @@ def telcos():
             f = l.split("|")
             out.append((f[0], f[1], f[2], f[3], f[4], f[5] if len(f) > 5 else "ws"))
     return out
+
+
+def telcos_utama():
+    """Senarai telco server Utama. Status telco (berfungsi/lemah/tak) sama untuk semua server, ikut nama."""
+    with on("local"):
+        return telcos()
 
 
 def telco_ok(t, kind):
@@ -330,6 +641,7 @@ def telco_path(kind, p):
     return p
 
 
+@remote
 def telco_link(uid, user, t, kind="v"):
     n, a, h, p, port = t[:5]
     ty = t[5] if len(t) > 5 else "ws"
@@ -356,9 +668,10 @@ TACT = {"v": "t", "m": "tm", "t": "tt"}
 
 def telco_kb(user, kind="v"):
     act = TACT[kind]
-    b = [btn(t[0], "%s:%s:%d" % (act, user, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
+    tok = user + vsuf()
+    b = [btn(t[0], "%s:%s:%d" % (act, tok, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
     kb = rows(b, 3)
-    kb.append([btn("Semua telco", "%s:%s:0" % (act, user)), btn("📝 Nota", "n:%s:%s" % (kind, user))])
+    kb.append([btn("Semua telco", "%s:%s:0" % (act, tok)), btn("📝 Nota", "n:%s:%s" % (kind, tok))])
     return kb
 
 
@@ -463,6 +776,7 @@ def trojan_std_links(user, uid):
     ]
 
 
+@remote
 def std_links(kind, user, uid):
     return {"v": vless_std_links, "m": vmess_std_links, "t": trojan_std_links}[kind](user, uid)
 
@@ -607,6 +921,7 @@ def acct_txt(kind, user, uid):
     return {"v": vless_txt, "m": vmess_txt, "t": trojan_txt}[kind](user, uid)
 
 
+@remote
 def xray_create(kind, user, days, iplim, quota, custom_uuid=None, nota=""):
     K = KIND[kind]
     D = K["dir"]
@@ -676,6 +991,7 @@ def xray_create(kind, user, days, iplim, quota, custom_uuid=None, nota=""):
     return {"user": user, "uuid": uid, "exp": exp, "ip": il, "quota": q}, ""
 
 
+@remote
 def xray_delete(kind, user):
     u = find(kind, user)
     if not u:
@@ -703,6 +1019,7 @@ def xray_delete(kind, user):
     return True, ""
 
 
+@remote
 def xray_renew(kind, user, days):
     u = find(kind, user)
     if not u:
@@ -724,6 +1041,7 @@ SSH_PORTS = ("OpenSSH     : 22\nDropbear    : 109, 143\nSSH WS      : 80, 8080, 
              "SSH SSL WS  : 443\nSSL/TLS     : 8443, 8881\nUDPGW       : 7100-7300")
 
 
+@remote
 def ssh_create(user, pw, days, iplim, quota):
     exp = exp_after(days)
     r = run(["useradd", "-e", exp, "-s", "/bin/false", "-M", user])
@@ -756,6 +1074,7 @@ def ssh_create(user, pw, days, iplim, quota):
     return {"user": user, "pw": pw, "exp": exp, "ip": iplim, "quota": q}, ""
 
 
+@remote
 def ssh_delete(user):
     u = find("s", user)
     if not u:
@@ -775,6 +1094,7 @@ def ssh_delete(user):
     return True, ""
 
 
+@remote
 def ssh_renew(user, days):
     u = find("s", user)
     if not u:
@@ -797,6 +1117,7 @@ def ssh_renew(user, days):
 
 
 # ---------------------------------------------------------------- mesej
+@remote
 def acct_info(kind, user, uid, exp):
     """Butiran akaun VLESS/VMess/Trojan (baris HTML) untuk mesej bot."""
     D = KIND[kind]["dir"]
@@ -831,6 +1152,7 @@ def acct_info(kind, user, uid, exp):
     return t
 
 
+@remote
 def acct_msg(kind, user, uid, exp, extra=""):
     K = KIND[kind]
     t = ["<b>%s siap</b>  ✦ kancil ecem" % K["nama"]] + acct_info(kind, user, uid, exp)
@@ -843,12 +1165,14 @@ def acct_msg(kind, user, uid, exp, extra=""):
     return "\n".join(t)
 
 
+@remote
 def ssh_msg(user, pw, exp, ip):
     return "\n".join(["<b>SSH siap</b>  ✦ kancil ecem", "User     : %s" % code(user), "Password : %s" % code(pw),
                       "Host     : %s" % code(domain()), "Luput    : %s (%d hari)" % (E(exp), days_left(exp)),
                       "Had IP   : %d" % ip, "", "<pre>%s</pre>" % E(SSH_PORTS), "", "Developer by kancil ecem"])
 
 
+@remote
 def list_msg():
     t = []
     for k in XKINDS:
@@ -865,6 +1189,7 @@ def list_msg():
     return "\n".join(t)
 
 
+@remote
 def status_msg():
     t = ["<b>Status VPS</b>  ✦ kancil ecem"]
     for svc in ("xray", "nginx", "dropbear", "stunnel4", "ws-stunnel"):
@@ -880,7 +1205,7 @@ def status_msg():
 
 def user_buttons(kind, prefix):
     src = users_of(kind)
-    b = [btn(u[0], "%s:%s:%s" % (prefix, kind, u[0])) for u in src[:90]]
+    b = [btn(u[0], "%s:%s:%s" % (prefix, kind, u[0] + vsuf())) for u in src[:90]]
     return rows(b, 2) + [[btn("Batal", "x")]]
 
 
@@ -914,7 +1239,7 @@ def v_uuid(chat, s):
         return True, None
     if not (UUID_RE.match(s) or UTXT_RE.match(s)):
         return False, "Tak sah. Guna UUID biasa (8-4-4-4-12) atau teks 8-30 aksara (A-Z a-z 0-9 . _ -). Atau taip auto."
-    if ('"%s"' % s) in "\n".join(lines_of("/etc/xray/config.json")):
+    if uuid_dipakai(s):
         return False, "Tu dah dipakai. Cuba yang lain."
     return True, s
 
@@ -950,11 +1275,16 @@ FLOWS = {
 
 
 def start_flow(chat, name, data=None):
-    STATE[chat] = {"flow": name, "i": 0, "d": data or {}}
-    send(chat, FLOWS[name][0][1] + "\n(/batal untuk berhenti)")
+    STATE[chat] = {"flow": name, "i": 0, "d": data or {}, "vps": CUR}
+    send(chat, vhead() + FLOWS[name][0][1] + "\n(/batal untuk berhenti)")
 
 
 def finish(chat, st):
+    with on(st.get("vps") or CUR):
+        _finish(chat, st)
+
+
+def _finish(chat, st):
     d = st["d"]
     flow = st["flow"]
     STATE.pop(chat, None)
@@ -965,13 +1295,13 @@ def finish(chat, st):
         if not r:
             send(chat, E(err), MAIN_KB)
             return
-        send(chat, acct_msg(kind, r["user"], r["uuid"], r["exp"]), telco_kb(r["user"], kind))
+        send(chat, vhead() + acct_msg(kind, r["user"], r["uuid"], r["exp"]), telco_kb(r["user"], kind))
     elif flow == "ss":
         r, err = ssh_create(d["nama"], d["pw"], d["hari"], d["ip"], d["gb"])
         if not r:
             send(chat, E(err), MAIN_KB)
             return
-        send(chat, ssh_msg(r["user"], r["pw"], r["exp"], r["ip"]), MAIN_KB)
+        send(chat, vhead() + ssh_msg(r["user"], r["pw"], r["exp"], r["ip"]), MAIN_KB)
     elif flow == "nt":
         kind = d.get("kind", "v")
         u = find(kind, d["user"])
@@ -990,14 +1320,15 @@ def finish(chat, st):
         if not exp:
             send(chat, E(err), MAIN_KB)
             return
-        send(chat, "Renew siap: %s luput %s (%d hari)" % (code(user), E(exp), days_left(exp)), MAIN_KB)
+        send(chat, vhead() + "Renew siap: %s luput %s (%d hari)" % (code(user), E(exp), days_left(exp)), MAIN_KB)
 
 
 def flow_input(chat, text):
     st = STATE[chat]
     steps = FLOWS[st["flow"]]
     key, _, validator = steps[st["i"]]
-    ok, val = validator(chat, text)
+    with on(st.get("vps") or CUR):
+        ok, val = validator(chat, text)
     if not ok:
         send(chat, E(val))
         return
@@ -1017,13 +1348,13 @@ def show_account(chat, kind, user):
         return
     if kind in KIND:
         _, exp, uid = u
-        send(chat, acct_msg(kind, user, uid, exp), telco_kb(user, kind))
+        send(chat, vhead() + acct_msg(kind, user, uid, exp), telco_kb(user, kind))
     else:
         _, exp, pw = u
-        il = rd("/etc/xray/sshx/%sIP" % user, "0")
-        send(chat, ssh_msg(user, pw, exp, int(il) if il.isdigit() else 0), MAIN_KB)
+        send(chat, vhead() + ssh_msg(user, pw, exp, ssh_iplimit(user)), MAIN_KB)
 
 
+@remote
 def kinds_of(name):
     return [k for k in ("v", "m", "t", "s") if find(k, name)]
 
@@ -1036,7 +1367,7 @@ def ask_kind(chat, name, prefix, label):
     if len(ks) == 1:
         return ks[0]
     send(chat, "%s ada dalam %s. %s yang mana?" % (code(name), ", ".join(kname(k) for k in ks), label),
-         rows([btn(kname(k), "%s:%s:%s" % (prefix, k, name)) for k in ks], 2))
+         rows([btn(kname(k), "%s:%s:%s" % (prefix, k, name + vsuf())) for k in ks], 2))
     return None
 
 
@@ -1077,7 +1408,8 @@ def on_command(chat, text):
             "/ssh nama kata_laluan hari [ip] [gb] - cipta SSH terus",
             "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
-            "/status - servis VPS", "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
+            "/status - servis VPS", "/vps - senarai server (VPS) yang disambung ke bot, tukar, tambah, buang",
+            "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
             "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
             "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
             "/trialreset ID [padam] - bagi orang tu cuba trial semula", "/batal - berhenti soalan"]))
@@ -1090,10 +1422,12 @@ def on_command(chat, text):
         jual_cmd(chat, cmd, a)
     elif cmd in ("/telco", "/telcook", "/telcolemah", "/telcotak"):
         telco_cmd(chat, cmd, a)
+    elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
+        vps_cmd(chat, cmd, a)
     elif cmd == "/senarai":
-        send(chat, list_msg(), MAIN_KB)
+        send(chat, vhead() + list_msg(), MAIN_KB)
     elif cmd == "/status":
-        send(chat, status_msg(), MAIN_KB)
+        send(chat, vhead() + status_msg(), MAIN_KB)
     elif cmd in ("/vless", "/vmess", "/trojan"):
         quick_create(chat, {"/vless": "v", "/vmess": "m", "/trojan": "t"}[cmd], a)
     elif cmd == "/ssh":
@@ -1134,8 +1468,8 @@ def on_command(chat, text):
     elif cmd == "/padam" and a:
         k = ask_kind(chat, a[0], "d", "Padam")
         if k:
-            send(chat, "Padam %s (%s)?" % (code(a[0]), kname(k)),
-                 [[btn("Ya, padam", "D:%s:%s" % (k, a[0])), btn("Batal", "x")]])
+            send(chat, vhead() + "Padam %s (%s)?" % (code(a[0]), kname(k)),
+                 [[btn("Ya, padam", "D:%s:%s" % (k, a[0] + vsuf())), btn("Batal", "x")]])
     elif cmd == "/renew" and len(a) >= 2:
         ok, days = v_int(1, 3650)(chat, a[1])
         if not ok:
@@ -1151,6 +1485,22 @@ def on_command(chat, text):
         send(chat, "Arahan tak dikenali. Taip /menu atau /bantuan.")
 
 
+def telco_papar(chat, kind, user, n):
+    u = find(kind, user)
+    if not u:
+        send(chat, "Akaun tak jumpa.", MAIN_KB)
+        return
+    T = telcos()
+    sel = [x for x in (T if n == 0 else T[n - 1:n]) if telco_ok(x, kind)]
+    if not sel:
+        send(chat, "Telco tak ada untuk jenis ni.", MAIN_KB)
+        return
+    out = [vhead() + "<b>Akaun %s</b>" % KIND[kind]["nama"]] + acct_info(kind, user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
+    for t in sel:
+        out += ["<b>%s</b>" % E(t[0]), code(telco_link(u[2], user, t, kind)), ""]
+    send(chat, "\n".join(out).rstrip(), telco_kb(user, kind))
+
+
 def on_callback(chat, data):
     p = data.split(":", 2)
     k = p[0]
@@ -1163,58 +1513,65 @@ def on_callback(chat, data):
         if what in ("vl", "vm", "tr", "ss"):
             start_flow(chat, what)
         elif what == "ls":
-            send(chat, list_msg(), MAIN_KB)
+            send(chat, vhead() + list_msg(), MAIN_KB)
         elif what == "st":
-            send(chat, status_msg(), MAIN_KB)
+            send(chat, vhead() + status_msg(), MAIN_KB)
+        elif what == "vp":
+            vps_menu(chat)
         elif what == "tl":
             send(chat, trial_admin_msg(), MAIN_KB)
         elif what == "jl":
             send(chat, jual_admin_msg(), MAIN_KB)
         elif what in ("ck", "dl", "rn"):
-            send(chat, "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("VMess", "%s:m" % what)],
-                                        [btn("Trojan", "%s:t" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
+            send(chat, vhead() + "Jenis akaun?", [[btn("VLESS", "%s:v" % what), btn("VMess", "%s:m" % what)],
+                                                  [btn("Trojan", "%s:t" % what), btn("SSH", "%s:s" % what)], [btn("Batal", "x")]])
+    elif k == "vp" and len(p) == 2:
+        if p[1] == "+":
+            vps_arahan_tambah(chat)
+        else:
+            vps_pilih(chat, p[1])
     elif k in ("ck", "dl", "rn") and len(p) == 2 and p[1] in KS:
         pre = {"ck": "c", "dl": "d", "rn": "r"}[k]
         kb = user_buttons(p[1], pre)
-        send(chat, "Pilih akaun:" if len(kb) > 1 else "Tiada akaun.", kb if len(kb) > 1 else MAIN_KB)
+        send(chat, vhead() + "Pilih akaun:" if len(kb) > 1 else vhead() + "Tiada akaun.", kb if len(kb) > 1 else MAIN_KB)
     elif k == "c" and len(p) == 3 and p[1] in KS:
-        show_account(chat, p[1], p[2])
+        u, vid = vsplit(p[2])
+        with on(vid):
+            show_account(chat, p[1], u)
     elif k == "d" and len(p) == 3 and p[1] in KS:
-        send(chat, "Padam %s (%s)?" % (code(p[2]), kname(p[1])),
-             [[btn("Ya, padam", "D:%s:%s" % (p[1], p[2])), btn("Batal", "x")]])
+        u, vid = vsplit(p[2])
+        with on(vid):
+            send(chat, vhead() + "Padam %s (%s)?" % (code(u), kname(p[1])),
+                 [[btn("Ya, padam", "D:%s:%s" % (p[1], p[2])), btn("Batal", "x")]])
     elif k == "D" and len(p) == 3 and p[1] in KS:
-        ok, err = ssh_delete(p[2]) if p[1] == "s" else xray_delete(p[1], p[2])
-        send(chat, ("Dah dipadam: %s" % code(p[2])) if ok else E(err), MAIN_KB)
+        u, vid = vsplit(p[2])
+        with on(vid):
+            ok, err = ssh_delete(u) if p[1] == "s" else xray_delete(p[1], u)
+            send(chat, vhead() + (("Dah dipadam: %s" % code(u)) if ok else E(err)), MAIN_KB)
     elif k == "r" and len(p) == 3 and p[1] in KS:
-        start_flow(chat, "rn", {"kind": p[1], "user": p[2]})
+        u, vid = vsplit(p[2])
+        with on(vid):
+            start_flow(chat, "rn", {"kind": p[1], "user": u})
     elif k == "n" and len(p) >= 2:
         if len(p) == 3 and p[1] in XKINDS:
-            kind, user = p[1], p[2]
+            kind, tok = p[1], p[2]
         else:
-            kind, user = "v", ":".join(p[1:])
-        if not find(kind, user):
-            send(chat, "Akaun tak jumpa.", MAIN_KB)
-            return
-        start_flow(chat, "nt", {"kind": kind, "user": user})
+            kind, tok = "v", ":".join(p[1:])
+        user, vid = vsplit(tok)
+        with on(vid):
+            if not find(kind, user):
+                send(chat, "Akaun tak jumpa.", MAIN_KB)
+                return
+            start_flow(chat, "nt", {"kind": kind, "user": user})
     elif k in ("ok", "no") and len(p) == 2 and re.match(r"^[A-Za-z0-9]{5}$", p[1]):
         (jual_sahkan if k == "ok" else jual_tolak)(p[1].upper(), chat)
     elif k in ("t", "tm", "tt"):
         kind = {"t": "v", "tm": "m", "tt": "t"}[k]
         q = data.split(":")
-        user, n = q[1], int(q[2]) if len(q) > 2 and q[2].isdigit() else 0
-        u = find(kind, user)
-        if not u:
-            send(chat, "Akaun tak jumpa.", MAIN_KB)
-            return
-        T = telcos()
-        sel = [x for x in (T if n == 0 else T[n - 1:n]) if telco_ok(x, kind)]
-        if not sel:
-            send(chat, "Telco tak ada untuk jenis ni.", MAIN_KB)
-            return
-        out = ["<b>Akaun %s</b>" % KIND[kind]["nama"]] + acct_info(kind, user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
-        for t in sel:
-            out += ["<b>%s</b>" % E(t[0]), code(telco_link(u[2], user, t, kind)), ""]
-        send(chat, "\n".join(out).rstrip(), telco_kb(user, kind))
+        user, vid = vsplit(q[1])
+        n = int(q[2]) if len(q) > 2 and q[2].isdigit() else 0
+        with on(vid):
+            telco_papar(chat, kind, user, n)
 
 
 # ---------------------------------------------------------------- TRIAL AWAM
@@ -1282,14 +1639,14 @@ def trial_nama(kind):
     return "Trial-" + "".join(secrets.choice("XYZ0123456789") for _ in range(4))
 
 
-def trial_start(chat, frm):
+def trial_start(chat, frm, vid=None):
     uid = frm["id"]
     adm = uid in ADMINS
     d = trial_load()
     if not d["aktif"] or (uid in d["banned"] and not adm):
         return
     now = time.time()
-    if not adm:
+    if not adm and vid is None:
         if now - TRIAL_SENYAP.get(uid, 0) < 2:
             return
         if len(TRIAL_SENYAP) > 2000:
@@ -1307,10 +1664,18 @@ def trial_start(chat, frm):
     if w > 0:
         send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
         return
-    kb = rows([btn("🎁 " + TRIAL_KIND[k], "pt:%s" % k) for k in d["jenis"]], 2)
+    if vid is None:
+        vid = vps_pilih_awam(chat, "trial")
+        if vid is None:
+            return
+    elif not vps_dibuka(vid):
+        send(chat, "Server tu tak dibuka sekarang. Taip /start untuk pilih semula.")
+        return
+    kb = rows([btn("🎁 " + TRIAL_KIND[k], "pt:%s%s" % (k, vtok(vid))) for k in d["jenis"]], 2)
     send(chat, "\n".join(["🎁 <b>Trial percuma</b>  ✦ kancil ecem",
                           "Tempoh %s • kuota %s • %d peranti" % (trial_tempoh(d["minit"] * 60), trial_gb(d["kuota"]), d["iplimit"]),
-                          "Satu trial setiap %d jam." % d["jam"], "", "Pilih jenis akaun:"]), kb)
+                          "Satu trial setiap %d jam." % d["jam"]] +
+                         (["Server: %s" % E(vps_nama(vid))] if vps_multi() else []) + ["", "Pilih jenis akaun:"]), kb)
 
 
 def trial_cb(chat, frm, data):
@@ -1323,20 +1688,26 @@ def trial_cb(chat, frm, data):
         send(chat, "Jenis ni tak dibuka. Taip /start.")
         return
     kind = p[1]
+    vid = p[2] if p[0] == "pt" and len(p) > 2 else (p[3] if p[0] == "pc" and len(p) > 3 else "local")
+    if not vps_dibuka(vid):
+        send(chat, "Server tu tak dibuka sekarang. Taip /start untuk pilih semula.")
+        return
     if p[0] == "pt":
         if kind == "s":
-            trial_buat(chat, frm, kind, 0)
+            trial_buat(chat, frm, kind, 0, vid)
             return
-        T = telcos()
+        with on(vid):
+            T = telcos()
         J = jual_load()
-        b = [btn(("" if telco_status(J, x[0]) == "ok" else TELCO_ST[telco_status(J, x[0])] + " ") + x[0], "pc:%s:%d" % (kind, i + 1))
+        b = [btn(("" if telco_status(J, x[0]) == "ok" else TELCO_ST[telco_status(J, x[0])] + " ") + x[0], "pc:%s:%d%s" % (kind, i + 1, vtok(vid)))
              for i, x in enumerate(T) if telco_status(J, x[0]) != "tak" and telco_ok(x, kind)]
-        kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0" % kind)]]
+        kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0%s" % (kind, vtok(vid)))]]
         send(chat, "Pilih telco kau:", kb)
-    elif p[0] == "pc" and len(p) == 3 and p[2].isdigit():
-        trial_buat(chat, frm, kind, int(p[2]))
+    elif p[0] == "pc" and len(p) in (3, 4) and p[2].isdigit():
+        trial_buat(chat, frm, kind, int(p[2]), vid)
 
 
+@remote
 def trial_msg(kind, r, tl, minit, d):
     now = time.time()
     t = ["🎁 <b>Trial %s</b>  ✦ kancil ecem" % TRIAL_KIND[kind]]
@@ -1356,12 +1727,20 @@ def trial_msg(kind, r, tl, minit, d):
     return "\n".join(x for x in t if x is not None)
 
 
-def trial_buat(chat, frm, kind, n):
+def trial_buat(chat, frm, kind, n, vid="local"):
+    with on(vid):
+        _trial_buat(chat, frm, kind, n, vid)
+
+
+def _trial_buat(chat, frm, kind, n, vid):
     d = trial_load()
     uid = frm["id"]
     adm = uid in ADMINS
     if not d["aktif"] or kind not in d["jenis"]:
         send(chat, "Trial tak dibuka sekarang.")
+        return
+    if not vps_dibuka(vid):
+        send(chat, "Server tu tak dibuka sekarang. Taip /start untuk pilih semula.")
         return
     if any(r["uid"] == uid for r in d["rec"]):
         send(chat, "Kau masih ada trial aktif." + trial_hubung(d))
@@ -1410,16 +1789,16 @@ def trial_buat(chat, frm, kind, n):
         send(chat, "Maaf, trial tak dapat dicipta sekarang. Cuba lagi sebentar.")
         return
     now = time.time()
-    d["rec"].append({"user": user, "kind": kind, "uid": uid, "chat": chat, "tamat": now + d["minit"] * 60})
+    d["rec"].append({"user": user, "kind": kind, "uid": uid, "chat": chat, "tamat": now + d["minit"] * 60, "vps": vid})
     if not adm:
         d["last"][str(uid)] = now
     d["last"] = {k: v for k, v in d["last"].items() if v + d["jam"] * 3600 > now}
     d["kira"] += 1
     trial_save(d)
-    send(chat, trial_msg(kind, r, tl, d["minit"], d))
+    send(chat, trial_msg(kind, r, tl, d["minit"], {"hubung": d.get("hubung", "")}))
     nm = E(" ".join(x for x in (frm.get("first_name", ""), ("@" + frm["username"]) if frm.get("username") else "") if x) or "-")
     note = "🎁 Trial %s%s  •  %s (<code>%d</code>)\n%s  •  aktif sekarang %d  •  hari ni %d" % (
-        TRIAL_KIND[kind], (" " + E(tl[0])) if tl else "", nm, uid, trial_tempoh(d["minit"] * 60), len(d["rec"]), d["kira"])
+        TRIAL_KIND[kind], ((" " + E(tl[0])) if tl else "") + vtag(vid), nm, uid, trial_tempoh(d["minit"] * 60), len(d["rec"]), d["kira"])
     for a in ADMINS:
         if a != chat:
             send(a, note)
@@ -1433,11 +1812,22 @@ def trial_sweep():
     if not due:
         return
     for r in due:
-        if r["kind"] == "s":
-            ok, err = ssh_delete(r["user"])
-        else:
-            ok, err = xray_delete(r["kind"], r["user"])
-        if not ok and find(r["kind"], r["user"]) is not None:
+        vid = r.get("vps", "local")
+        try:
+            with on(vid):
+                if r["kind"] == "s":
+                    ok, err = ssh_delete(r["user"])
+                else:
+                    ok, err = xray_delete(r["kind"], r["user"])
+                masih = (not ok) and find(r["kind"], r["user"]) is not None
+        except VPSError as e:
+            if vps_get(vid) is not None and now - r["tamat"] < 86400:
+                r["next"] = now + 300
+                log("trial: server %s tak dapat dihubungi, cuba lagi nanti: %s" % (vid, e))
+                continue
+            log("trial: rekod %s ditinggalkan (server %s: %s)" % (r["user"], vid, e))
+            ok, err, masih = True, "", False
+        if masih:
             r["cuba"] = r.get("cuba", 0) + 1
             r["next"] = now + 120
             log("trial gagal dipadam:", r["user"], err)
@@ -1445,12 +1835,12 @@ def trial_sweep():
                 continue
             for a in ADMINS:
                 send(a, "⚠️ Trial %s tak dapat dipadam sendiri selepas 5 cubaan. Padam manual." % code(r["user"]))
-        d["rec"] = [x for x in d["rec"] if x is not r and not (x["user"] == r["user"] and x["kind"] == r["kind"])]
+        d["rec"] = [x for x in d["rec"] if x is not r and not (x["user"] == r["user"] and x["kind"] == r["kind"] and x.get("vps", "local") == vid)]
         send(r["chat"], "⏰ Trial %s dah tamat dan dipadam. Terima kasih dah cuba!" % code(r["user"]) + trial_hubung(d))
     # simpan dengan keadaan terkini (rekod yang masih tinggal + penanda cuba semula)
     d2 = trial_load()
-    keep = {(x["user"], x["kind"]): x for x in d["rec"]}
-    d2["rec"] = [keep.get((x["user"], x["kind"]), x) for x in d2["rec"] if (x["user"], x["kind"]) in keep]
+    keep = {(x["user"], x["kind"], x.get("vps", "local")): x for x in d["rec"]}
+    d2["rec"] = [keep.get((x["user"], x["kind"], x.get("vps", "local")), x) for x in d2["rec"] if (x["user"], x["kind"], x.get("vps", "local")) in keep]
     trial_save(d2)
 
 
@@ -1465,7 +1855,8 @@ def trial_admin_msg():
          "Hubungi : %s" % (E(d["hubung"]) if d["hubung"] else "-"),
          "Disekat : %d orang" % len(d["banned"]), "", "Aktif sekarang: %d" % len(d["rec"])]
     for r in d["rec"]:
-        L.append(" %s  %s  sisa %s  (tg:%d)" % (TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(max(0, r["tamat"] - now)), r["uid"]))
+        L.append(" %s  %s  sisa %s  (tg:%d)%s" % (TRIAL_KIND[r["kind"]], code(r["user"]), trial_tempoh(max(0, r["tamat"] - now)), r["uid"],
+                                                    vtag(r.get("vps", "local"))))
     L += ["", "/trialon  /trialoff", "/trialset minit=60 (atau hari=1) jam=24 aktif=20 sehari=30 kuota=2 ip=1 jenis=v,m,t,s hubung=@nama",
           "/trialban ID  /trialbuka ID  /trialuji (cuba sendiri)", "/trialreset ID  (kosongkan jeda, dia boleh minta trial lagi; tambah padam untuk tamatkan trial yang masih jalan)"]
     return "\n".join(L)
@@ -1581,7 +1972,7 @@ JUAL_DEF = {"aktif": False, "sen": 1000, "hari": 30, "kuota": 0, "iplimit": 2, "
 JUAL_RANGE = {"hari": (1, 365), "kuota": (0, 9999), "ip": (0, 20), "luput": (1, 168)}
 RM_RE = re.compile(r"^\d{1,4}(\.\d{1,2})?$")
 KEDAI_SENYAP = {}
-KEDAI_CB = ("ky:", "kb:", "kc:", "kr:", "ka:", "kt:", "kx:")
+KEDAI_CB = ("ky:", "ks:", "kb:", "kc:", "kr:", "ka:", "kt:", "kx:")
 TELCO_ST = {"ok": "✅", "lemah": "⚠️", "tak": "❌"}
 
 
@@ -1626,7 +2017,7 @@ def telco_status(J, name):
 
 
 def telco_senarai_pelanggan(J, boleh_trial):
-    T = telcos()
+    T = telcos_utama()
     if not T:
         return "Belum ada telco disediakan. Pilih link biasa."
     ok = [telco_nama(x) for x in T if telco_status(J, x[0]) == "ok"]
@@ -1644,7 +2035,7 @@ def telco_senarai_pelanggan(J, boleh_trial):
 
 
 def telco_admin_msg(J):
-    T = telcos()
+    T = telcos_utama()
     L = ["📶 <b>Status telco</b>  (pelanggan nampak ini)"]
     for i, x in enumerate(T):
         L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, x[0])], E(telco_nama(x))))
@@ -1660,6 +2051,7 @@ def tg_nama(frm):
     return " ".join(x for x in (frm.get("first_name", ""), ("@" + frm["username"]) if frm.get("username") else "") if x) or "-"
 
 
+@remote
 def jual_nama(frm, kind):
     """Nama akaun ikut nama Telegram: username kalau ada, kalau tak nama pertama. Huruf, nombor, _ . - sahaja."""
     base = frm.get("username") or frm.get("first_name") or ""
@@ -1752,6 +2144,8 @@ def jual_pay_screen(chat, o, J):
          ("Renew %s %s • tambah %d hari • %s" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"], rm(o["sen"])))]
     if o.get("telco"):
         t.append("Telco: <b>%s</b>" % E(o["telco"]))
+    if vps_multi():
+        t.append("Server: <b>%s</b>" % E(vps_nama(o.get("vps", "local"))))
     t += ["", "1) Scan QR dan bayar <b>%s</b> tepat." % rm(o["sen"]),
           "2) Letak kod %s dalam rujukan atau catatan bayaran." % code(o["id"]),
           "3) Hantar <b>gambar resit</b> kat sini.",
@@ -1761,11 +2155,14 @@ def jual_pay_screen(chat, o, J):
     send_photo(chat, J["qr"], "\n".join(t), [[btn("❌ Batal order", "kx:%s" % o["id"])]])
 
 
-def jual_order_baru(chat, frm, kind, jenis, user="", telco=""):
+def jual_order_baru(chat, frm, kind, jenis, user="", telco="", vid="local"):
     J = jual_load()
     uid = frm["id"]
     if not jual_hidup(J) or kind not in J["jenis"]:
         send(chat, "Jualan tak dibuka sekarang.")
+        return
+    if jenis == "baru" and not vps_dibuka(vid):
+        send(chat, "Server tu tak dibuka sekarang. Tekan /start untuk pilih semula.")
         return
     o = jual_buka(J, uid)
     if o:
@@ -1777,31 +2174,44 @@ def jual_order_baru(chat, frm, kind, jenis, user="", telco=""):
         return
     o = {"id": jual_order_id(J), "uid": uid, "chat": chat, "nama": tg_nama(frm), "tg": frm.get("username", ""),
          "fn": frm.get("first_name", ""), "kind": kind, "jenis": jenis, "user": user, "telco": telco, "sen": J["sen"], "hari": J["hari"],
-         "t": time.time(), "status": "menunggu_bayar", "resit": 0}
+         "t": time.time(), "status": "menunggu_bayar", "resit": 0, "vps": vid}
     J["orders"].append(o)
     jual_save(J)
     jual_pay_screen(chat, o, J)
 
 
 def jual_miliknya(J, uid):
-    out = []
+    """Akaun yang pelanggan ni beli dan masih ada: [(jenis, nama, padanan find(), id server)]."""
+    per = {}
     for key, own in J["akaun"].items():
         if own != uid:
             continue
-        k, u = key.split(":", 1)
-        a = find(k, u)
-        if a:
-            out.append((k, u, a))
+        k, tok = key.split(":", 1)
+        u, vid = vsplit(tok)
+        per.setdefault(vid, []).append((k, u))
+    out = []
+    for vid, prs in per.items():
+        try:
+            with on(vid):
+                res = find_many(prs)
+        except VPSError as e:
+            log("akaun pelanggan: server %s tak dapat dihubungi: %s" % (vid, e))
+            continue
+        for (k, u), a in zip(prs, res):
+            if a:
+                out.append((k, u, a, vid))
     return out
 
 
 def jual_kb_telco(kind, user):
-    b = [btn(t[0], "kt:%s:%s:%d" % (kind, user, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
+    tok = user + vsuf()
+    b = [btn(t[0], "kt:%s:%s:%d" % (kind, tok, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
     kb = rows(b, 3)
-    kb.append([btn("Semua telco", "kt:%s:%s:0" % (kind, user))])
+    kb.append([btn("Semua telco", "kt:%s:%s:0" % (kind, tok))])
     return kb
 
 
+@remote
 def jual_butiran(kind, user, a, kepala="Akaun %s", telco=""):
     """a = padanan find(): (nama, luput, uuid/kata laluan). Teks HTML butiran akaun untuk pelanggan."""
     if kind == "s":
@@ -1821,26 +2231,33 @@ def jual_butiran(kind, user, a, kepala="Akaun %s", telco=""):
     return "\n".join(t)
 
 
-def jual_hantar_akaun(chat, kind, user, kepala, telco=""):
-    a = find(kind, user)
-    if not a:
-        return
-    send(chat, jual_butiran(kind, user, a, kepala, telco), jual_kb_telco(kind, user) if kind != "s" else None)
+def jual_hantar_akaun(chat, kind, user, kepala, telco="", vid="local"):
+    with on(vid):
+        a = find(kind, user)
+        if not a:
+            return
+        send(chat, jual_butiran(kind, user, a, kepala, telco), jual_kb_telco(kind, user) if kind != "s" else None)
 
 
-def jual_pilih_telco(chat, J, kind):
-    T = telcos()
+def jual_pilih_jenis(chat, J, vid):
+    send(chat, "Pilih jenis akaun (%s / %d hari)%s:" % (rm(J["sen"]), J["hari"], (" • server %s" % vps_nama(vid)) if vps_multi() else ""),
+         rows([btn(TRIAL_KIND[x], "kb:%s%s" % (x, vtok(vid))) for x in J["jenis"]], 2))
+
+
+def jual_pilih_telco(chat, J, kind, vid="local"):
+    with on(vid):
+        T = telcos()
     b = []
     for i, x in enumerate(T):
         s = telco_status(J, x[0])
         if s != "tak" and telco_ok(x, kind):
-            b.append(btn("%s %s" % (TELCO_ST[s], x[0]), "kc:%s:%d" % (kind, i + 1)))
+            b.append(btn("%s %s" % (TELCO_ST[s], x[0]), "kc:%s:%d%s" % (kind, i + 1, vtok(vid))))
     tk = [x[0] for x in T if telco_status(J, x[0]) == "tak" and telco_ok(x, kind)]
     teks = ["Pilih telco kau dulu. ✅ berfungsi, ⚠️ kadang-kadang."]
     if tk:
         teks.append("❌ Tak berfungsi sekarang (tak boleh dipilih): %s" % E(", ".join(tk)))
     teks += ["", "Lepas pilih, bot hantar QR bayaran."]
-    send(chat, "\n".join(teks), rows(b, 2) + [[btn("Tak pasti / mana-mana", "kc:%s:0" % kind)]])
+    send(chat, "\n".join(teks), rows(b, 2) + [[btn("Tak pasti / mana-mana", "kc:%s:0%s" % (kind, vtok(vid)))]])
 
 
 def kedai_cb(chat, frm, data):
@@ -1861,30 +2278,55 @@ def kedai_cb(chat, frm, data):
         elif not jual_hidup(J):
             send(chat, "Jualan tak dibuka sekarang.")
         elif p[1] == "beli":
-            send(chat, "Pilih jenis akaun (%s / %d hari):" % (rm(J["sen"]), J["hari"]),
-                 rows([btn(TRIAL_KIND[x], "kb:%s" % x) for x in J["jenis"]], 2))
+            vid = vps_pilih_awam(chat, "beli")
+            if vid is not None:
+                jual_pilih_jenis(chat, J, vid)
         elif p[1] == "renew":
             L = jual_miliknya(J, uid)
             if not L:
                 send(chat, "Kau belum ada akaun beli kat sini (atau dah dipadam). Tekan Beli akaun.")
             else:
                 send(chat, "Renew akaun mana? (+%d hari, %s)" % (J["hari"], rm(J["sen"])),
-                     rows([btn("%s %s (%dh)" % (TRIAL_KIND[kk], u, days_left(a[1])), "kr:%s:%s" % (kk, u)) for kk, u, a in L], 1))
+                     rows([btn("%s %s (%dh)%s" % (TRIAL_KIND[kk], u, days_left(a[1]), vlabel(vid)), "kr:%s:%s%s" % (kk, u, vsuf(vid))) for kk, u, a, vid in L], 1))
         elif p[1] == "akaun":
             L = jual_miliknya(J, uid)
             if not L:
                 send(chat, "Kau belum ada akaun beli kat sini.")
             else:
-                send(chat, "Akaun kau:", rows([btn("%s %s (%d hari)" % (TRIAL_KIND[kk], u, days_left(a[1])), "ka:%s:%s" % (kk, u)) for kk, u, a in L], 1))
-    elif k == "kb" and len(p) == 2 and p[1] in TRIAL_KIND:
+                send(chat, "Akaun kau:", rows([btn("%s %s (%d hari)%s" % (TRIAL_KIND[kk], u, days_left(a[1]), vlabel(vid)), "ka:%s:%s%s" % (kk, u, vsuf(vid))) for kk, u, a, vid in L], 1))
+    elif k == "ks" and len(p) == 3 and p[1] in ("trial", "beli"):
+        vid = p[2]
+        if not vps_dibuka(vid):
+            send(chat, "Server tu tak dibuka sekarang. Pilih yang lain.")
+            vps_pilih_awam(chat, p[1])
+        elif p[1] == "trial":
+            trial_start(chat, frm, vid)
+        elif not jual_hidup(J):
+            send(chat, "Jualan tak dibuka sekarang.")
+        else:
+            jual_pilih_jenis(chat, J, vid)
+    elif k == "kb" and len(p) in (2, 3) and p[1] in TRIAL_KIND:
+        vid = p[2] if len(p) == 3 else "local"
         if not jual_hidup(J) or p[1] not in J["jenis"]:
             send(chat, "Jualan tak dibuka sekarang.")
-        elif p[1] == "s" or jual_buka(J, uid) or not [x for x in telcos() if telco_ok(x, p[1])]:
-            jual_order_baru(chat, frm, p[1], "baru")
+        elif not vps_dibuka(vid):
+            send(chat, "Server tu tak dibuka sekarang. Tekan /start untuk pilih semula.")
         else:
-            jual_pilih_telco(chat, J, p[1])
-    elif k == "kc" and len(p) == 3 and p[1] in TRIAL_KIND and p[1] != "s" and p[2].isdigit():
-        T2 = telcos()
+            terus = p[1] == "s" or bool(jual_buka(J, uid))
+            if not terus:
+                with on(vid):
+                    terus = not [x for x in telcos() if telco_ok(x, p[1])]
+            if terus:
+                jual_order_baru(chat, frm, p[1], "baru", vid=vid)
+            else:
+                jual_pilih_telco(chat, J, p[1], vid)
+    elif k == "kc" and len(p) in (3, 4) and p[1] in TRIAL_KIND and p[1] != "s" and p[2].isdigit():
+        vid = p[3] if len(p) == 4 else "local"
+        if not vps_dibuka(vid):
+            send(chat, "Server tu tak dibuka sekarang. Tekan /start untuk pilih semula.")
+            return
+        with on(vid):
+            T2 = telcos()
         n = int(p[2])
         if n > len(T2):
             return
@@ -1893,44 +2335,52 @@ def kedai_cb(chat, frm, data):
             nama = T2[n - 1][0]
             if not telco_ok(T2[n - 1], p[1]):
                 send(chat, "Telco %s tak ada untuk jenis ni. Pilih yang lain." % code(nama))
-                jual_pilih_telco(chat, J, p[1])
+                jual_pilih_telco(chat, J, p[1], vid)
                 return
             if jual_hidup(J) and telco_status(J, nama) == "tak":
                 send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(nama))
-                jual_pilih_telco(chat, J, p[1])
+                jual_pilih_telco(chat, J, p[1], vid)
                 return
-        jual_order_baru(chat, frm, p[1], "baru", telco=nama)
+        jual_order_baru(chat, frm, p[1], "baru", telco=nama, vid=vid)
     elif k == "kr" and len(p) == 3 and p[1] in TRIAL_KIND:
-        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+        u, vid = vsplit(p[2])
+        if J["akaun"].get(akey(p[1], u, vid)) != uid:
             return
-        if not find(p[1], p[2]):
+        with on(vid):
+            ada = find(p[1], u)
+        if not ada:
             send(chat, "Akaun tu dah dipadam. Tekan Beli akaun untuk beli baru.")
             return
-        jual_order_baru(chat, frm, p[1], "renew", p[2])
+        jual_order_baru(chat, frm, p[1], "renew", u, vid=vid)
     elif k == "ka" and len(p) == 3 and p[1] in TRIAL_KIND:
-        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+        u, vid = vsplit(p[2])
+        if J["akaun"].get(akey(p[1], u, vid)) != uid:
             return
-        if not find(p[1], p[2]):
+        with on(vid):
+            ada = find(p[1], u)
+        if not ada:
             send(chat, "Akaun tu dah dipadam.")
             return
-        jual_hantar_akaun(chat, p[1], p[2], "Akaun %s")
+        jual_hantar_akaun(chat, p[1], u, "Akaun %s", vid=vid)
     elif k == "kt" and len(p) == 4 and p[1] in KIND and p[3].isdigit():
-        if J["akaun"].get("%s:%s" % (p[1], p[2])) != uid:
+        u, vid = vsplit(p[2])
+        if J["akaun"].get(akey(p[1], u, vid)) != uid:
             return
-        a = find(p[1], p[2])
-        if not a:
-            send(chat, "Akaun tu dah dipadam.")
-            return
-        T2 = telcos()
-        n = int(p[3])
-        sel = [x for x in (T2 if n == 0 else T2[n - 1:n]) if telco_ok(x, p[1])]
-        if not sel:
-            send(chat, "Telco tak ada untuk jenis ni.")
-            return
-        out = ["<b>Akaun %s</b>" % KIND[p[1]]["nama"]] + [l for l in acct_info(p[1], p[2], a[2], a[1]) if not l.startswith("Nota")] + ["", "<b>Link telco</b>", ""]
-        for t in sel:
-            out += ["<b>%s</b>" % E(t[0]), code(telco_link(a[2], p[2], t, p[1])), ""]
-        send(chat, "\n".join(out).rstrip(), jual_kb_telco(p[1], p[2]))
+        with on(vid):
+            a = find(p[1], u)
+            if not a:
+                send(chat, "Akaun tu dah dipadam.")
+                return
+            T2 = telcos()
+            n = int(p[3])
+            sel = [x for x in (T2 if n == 0 else T2[n - 1:n]) if telco_ok(x, p[1])]
+            if not sel:
+                send(chat, "Telco tak ada untuk jenis ni.")
+                return
+            out = ["<b>Akaun %s</b>" % KIND[p[1]]["nama"]] + [l for l in acct_info(p[1], u, a[2], a[1]) if not l.startswith("Nota")] + ["", "<b>Link telco</b>", ""]
+            for t in sel:
+                out += ["<b>%s</b>" % E(t[0]), code(telco_link(a[2], u, t, p[1])), ""]
+            send(chat, "\n".join(out).rstrip(), jual_kb_telco(p[1], u))
     elif k == "kx" and len(p) == 2:
         o = jual_cari(J, p[1])
         if not o or o["uid"] != uid or o["status"] not in ("menunggu_bayar", "menunggu_sah"):
@@ -1975,8 +2425,9 @@ def kedai_media(msg):
                          "Pelanggan: %s (tg:%d)" % (E(o["nama"]), uid),
                          ("Beli %s %d hari%s" % (TRIAL_KIND[o["kind"]], o["hari"], (" • telco %s" % E(o["telco"])) if o.get("telco") else "")) if o["jenis"] == "baru" else
                          ("Renew %s %s +%d hari" % (TRIAL_KIND[o["kind"]], code(o["user"]), o["hari"])),
-                         "Jumlah: <b>%s</b>" % rm(o["sen"]), "",
-                         "⚠️ Semak duit dah masuk dalam bank dulu, baru tekan Sahkan."])
+                         "Jumlah: <b>%s</b>" % rm(o["sen"])] +
+                        (["Server: <b>%s</b>" % E(vps_nama(o.get("vps", "local")))] if vps_multi() else []) +
+                        ["", "⚠️ Semak duit dah masuk dalam bank dulu, baru tekan Sahkan."])
     akb = [[btn("✅ Sahkan", "ok:%s" % o["id"]), btn("❌ Tolak", "no:%s" % o["id"])]]
     for a in ADMINS:
         try:
@@ -1998,42 +2449,61 @@ def jual_sahkan(oid, adm_chat):
         send(adm_chat, "Order %s dah diproses (%s)." % (code(oid), E(o["status"])))
         return
     kind = o["kind"]
+    vid = o.get("vps", "local")
+    def gagal_vps(e):
+        return "⚠️ Server %s tak dapat dihubungi: %s. Order %s kekal, cuba tekan Sahkan lagi." % (E(vps_nama(vid)), E(e), code(oid))
     if o["jenis"] == "renew":
         u = o["user"]
-        if J["akaun"].get("%s:%s" % (kind, u)) != o["uid"] or not find(kind, u):
-            send(adm_chat, "⚠️ Akaun %s dah tak ada atau bukan milik pelanggan. Order %s tak diproses." % (code(u), code(oid)))
+        try:
+            with on(vid):
+                if J["akaun"].get(akey(kind, u, vid)) != o["uid"] or not find(kind, u):
+                    send(adm_chat, "⚠️ Akaun %s dah tak ada atau bukan milik pelanggan. Order %s tak diproses." % (code(u), code(oid)))
+                    return
+                if kind == "s":
+                    exp, err = ssh_renew(u, o["hari"])
+                else:
+                    exp, err = xray_renew(kind, u, o["hari"])
+        except VPSError as e:
+            send(adm_chat, gagal_vps(e))
             return
-        if kind == "s":
-            exp, err = ssh_renew(u, o["hari"])
-        else:
-            exp, err = xray_renew(kind, u, o["hari"])
         if not exp:
             send(adm_chat, "⚠️ Renew gagal: %s. Order %s kekal, cuba tekan Sahkan lagi." % (E(err), code(oid)))
             return
         o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), u
         jual_save(J)
-        jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s")
-        send(adm_chat, "✅ Order %s disahkan: renew %s %s +%d hari." % (code(oid), TRIAL_KIND[kind], code(u), o["hari"]), MAIN_KB)
+        try:
+            jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s", vid=vid)
+        except VPSError as e:
+            send(adm_chat, "⚠️ Renew siap tapi butiran tak dapat dihantar kat pelanggan (%s). Dia boleh tekan Akaun saya." % E(e))
+        send(adm_chat, "✅ Order %s disahkan: renew %s %s +%d hari.%s" % (code(oid), TRIAL_KIND[kind], code(u), o["hari"], vtag(vid)), MAIN_KB)
         return
     frm = {"id": o["uid"], "first_name": o.get("fn", ""), "username": o.get("tg", "")}
-    user = jual_nama(frm, kind)
-    if not user:
-        send(adm_chat, "⚠️ Tak dapat cipta nama akaun. Order %s kekal." % code(oid))
-        return
     nota = "Beli tg:%d order %s %s" % (o["uid"], oid, rm(o["sen"]))
-    if kind == "s":
-        pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
-        r, err = ssh_create(user, pw, o["hari"], J["iplimit"], J["kuota"])
-    else:
-        r, err = xray_create(kind, user, o["hari"], J["iplimit"], J["kuota"], nota=nota)
+    try:
+        with on(vid):
+            user = jual_nama(frm, kind)
+            if not user:
+                send(adm_chat, "⚠️ Tak dapat cipta nama akaun. Order %s kekal." % code(oid))
+                return
+            if kind == "s":
+                pw = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(10))
+                r, err = ssh_create(user, pw, o["hari"], J["iplimit"], J["kuota"])
+            else:
+                r, err = xray_create(kind, user, o["hari"], J["iplimit"], J["kuota"], nota=nota)
+    except VPSError as e:
+        send(adm_chat, gagal_vps(e))
+        return
     if not r:
         send(adm_chat, "⚠️ Gagal cipta akaun: %s. Order %s kekal, cuba tekan Sahkan lagi." % (E(err), code(oid)))
         return
-    J["akaun"]["%s:%s" % (kind, user)] = o["uid"]
+    J["akaun"][akey(kind, user, vid)] = o["uid"]
     o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), user
     jual_save(J)
-    jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap", o.get("telco", ""))
-    send(adm_chat, "✅ Order %s disahkan: %s %s dicipta untuk %s." % (code(oid), TRIAL_KIND[kind], code(user), E(o["nama"])), MAIN_KB)
+    try:
+        jual_hantar_akaun(o["chat"], kind, user, "Akaun %s siap", o.get("telco", ""), vid=vid)
+    except VPSError as e:
+        send(adm_chat, "⚠️ Akaun dicipta tapi butiran tak dapat dihantar kat pelanggan (%s). Dia boleh tekan Akaun saya." % E(e))
+    send(adm_chat, "✅ Order %s disahkan: %s %s dicipta untuk %s.%s" % (code(oid), TRIAL_KIND[kind], code(user), E(o["nama"]), vtag(vid)), MAIN_KB)
 
 
 def jual_tolak(oid, adm_chat):
@@ -2102,7 +2572,7 @@ def telco_cmd(chat, cmd, a):
         send(chat, telco_admin_msg(J), MAIN_KB)
         return
     st = {"/telcook": "ok", "/telcolemah": "lemah", "/telcotak": "tak"}[cmd]
-    T = telcos()
+    T = telcos_utama()
     if not a:
         send(chat, "Guna: %s nama [nama ...]  (atau nombor, atau  semua).  Taip /telco untuk senarai." % cmd)
         return
@@ -2211,7 +2681,331 @@ def jual_cmd(chat, cmd, a):
         (jual_sahkan if cmd == "/sahkan" else jual_tolak)(a[0].upper(), chat)
 
 
+# ---------------------------------------------------------------- arahan server (admin)
+@remote
+def vps_info():
+    return {"domain": domain(), "xray_conf": os.path.exists(XCONF), "xray": run(["systemctl", "is-active", "xray"]).stdout.strip(),
+            "v": len(xusers("v")), "m": len(xusers("m")), "t": len(xusers("t")), "s": len(ssh_users())}
+
+
+def vps_status(vid):
+    """Semakan sebenar (tak guna cache DOWN). Pulang (maklumat, "") atau (None, ralat)."""
+    try:
+        if vid == "local":
+            with on("local"):
+                return RPC["vps_info"](), ""
+        v = vps_get(vid)
+        if not v:
+            return None, "tak wujud"
+        return rpc_call_v(v, "vps_info", [], {}), ""
+    except VPSError as e:
+        return None, str(e)
+
+
+def vps_key():
+    """Pastikan kunci SSH bot ada. Pulang kunci awam (teks)."""
+    k = P(VPS_KEY)
+    if not os.path.exists(k):
+        os.makedirs(os.path.dirname(k), exist_ok=True)
+        try:
+            r = run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "tbot-master", "-f", k], timeout=30)
+        except OSError:
+            raise VPSError("ssh-keygen tak ada. Jalankan: apt install -y openssh-client")
+        if r.returncode != 0 or not os.path.exists(k + ".pub"):
+            raise VPSError("gagal buat kunci SSH: " + _ralat_ssh(r.stderr))
+    try:
+        os.chmod(k, 0o600)
+    except OSError:
+        pass
+    pub = rd(VPS_KEY + ".pub", "")
+    if not pub:
+        r = run(["ssh-keygen", "-y", "-f", k], timeout=30)
+        pub = r.stdout.strip() if r.returncode == 0 else ""
+        if pub:
+            with open(k + ".pub", "w") as f:
+                f.write(pub + " tbot-master\n")
+            pub += " tbot-master"
+    return pub
+
+
+def vps_list_msg(chat):
+    d = vps_load()
+    pil = vps_pilih_get(chat, d)
+    L = ["🖥 <b>Server</b>  ✦ kancil ecem", "Bot ni hidup kat server <b>Utama</b>. Server lain disambung guna SSH.", ""]
+    for v in vps_semua(d):
+        info, err = vps_status(v["id"])
+        L.append("%s<b>%s</b>  %s%s" % ("▶ " if v["id"] == pil else "", E(v["nama"]), code(v["id"]), "" if v["buka"] else "  🔒 tutup"))
+        if info:
+            L.append("   %s  %s  VLESS %d, VMess %d, Trojan %d, SSH %d" % (
+                code(info["domain"]), "✅" if info["xray"] == "active" else "⚠️ xray " + E(info["xray"] or "?"),
+                info["v"], info["m"], info["t"], info["s"]))
+        else:
+            L.append("   ❌ tak dapat dihubungi: %s" % E(err))
+        if v["host"]:
+            L.append("   %s%s" % (E(v["host"]), (":%d" % v["port"]) if v["port"] != 22 else ""))
+    L += ["", "▶ = server yang kau tengah urus (cipta, senarai, padam, renew guna server ni).",
+          "🔒 tutup = pelanggan tak nampak server tu untuk beli atau trial baru (akaun sedia ada dan renew jalan macam biasa).", "",
+          "/vpspilih ID  - tukar server yang diurus", "/vpstambah  - tambah server baru", "/vpsbuang ID  - buang server",
+          "/vpsnama ID nama  - tukar nama", "/vpstutup ID  /vpsbuka ID  - tutup atau buka untuk pelanggan baru"]
+    return "\n".join(L)
+
+
+def vps_menu(chat):
+    d = vps_load()
+    pil = vps_pilih_get(chat, d)
+    kb = rows([btn(("▶ " if v["id"] == pil else "") + v["nama"], "vp:%s" % v["id"]) for v in vps_semua(d)], 2)
+    kb.append([btn("➕ Tambah server", "vp:+")])
+    send(chat, vps_list_msg(chat), kb)
+
+
+def vps_arahan_tambah(chat):
+    try:
+        key = vps_key()
+    except VPSError as e:
+        send(chat, "⚠️ " + E(e))
+        return
+    send(chat, "\n".join([
+        "🖥 <b>Tambah server (VPS) baru</b>",
+        "VPS tu mesti dah ada autoscript yang sama dan boleh log masuk sebagai root.", "",
+        "<b>Langkah 1</b> - kat VPS baru, jalankan arahan ni (satu baris):",
+        code("mkdir -p ~/.ssh && echo '%s' >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys" % key), "",
+        "<b>Langkah 2</b> - balik sini, taip:", code("/vpstambah NAMA IP"), "contoh: /vpstambah SG1 1.2.3.4", "",
+        "Token bot kekal kat server Utama sahaja. Server tambahan tak ada token."]))
+
+
+def vps_pilih(chat, vid):
+    d = vps_load()
+    v = vps_get(vid, d)
+    if not v:
+        send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
+        return
+    d["pilih"][str(chat)] = vid
+    vps_save(d)
+    STATE.pop(chat, None)
+    send(chat, "🖥 Sekarang kau urus server <b>%s</b>. Cipta, senarai, semak, padam dan renew akaun kat server ni." % E(v["nama"]), MAIN_KB)
+
+
+def vps_tambah(chat, a):
+    if not a:
+        vps_arahan_tambah(chat)
+        return
+    if len(a) not in (2, 3):
+        send(chat, "Guna: /vpstambah NAMA IP [PORT]   contoh: /vpstambah SG1 1.2.3.4")
+        return
+    nama, host = a[0], a[1]
+    port = 22
+    if not VNAMA_RE.match(nama):
+        send(chat, "NAMA: huruf, nombor, - _ sahaja (maksimum 20). Contoh SG1.")
+        return
+    if not HOST_RE.match(host):
+        send(chat, "IP atau domain tak sah.")
+        return
+    if len(a) == 3:
+        if not a[2].isdigit() or not 1 <= int(a[2]) <= 65535:
+            send(chat, "PORT mesti nombor 1 hingga 65535.")
+            return
+        port = int(a[2])
+    d = vps_load()
+    if any(v["host"].lower() == host.lower() and v["port"] == port for v in vps_semua(d)):
+        send(chat, "Server tu dah ada dalam senarai. Taip /vps.")
+        return
+    if len(d["v"]) >= 8:
+        send(chat, "Maksimum 8 server tambahan.")
+        return
+    vid = "v%d" % (d["seq"] + 1)
+    v = {"id": vid, "nama": nama, "host": host, "port": port, "buka": True, "t": time.time()}
+    send(chat, "Sekejap, cuba sambung ke %s ..." % code(host))
+    try:
+        vps_key()
+        rc, out, err = ssh_run(v, "echo tbot-ok", b"", 40)
+        if rc != 0 or "tbot-ok" not in out:
+            send(chat, "❌ Tak dapat masuk ke %s.\n%s\n\nSemak: (1) IP betul, (2) arahan Langkah 1 dah dijalankan kat VPS tu (taip /vpstambah tanpa apa-apa untuk lihat semula), (3) SSH root dibenarkan." % (
+                code(host), E(_ralat_ssh(err))))
+            return
+        rc, out, err = ssh_run(v, "command -v python3", b"", 30)
+        if rc != 0:
+            send(chat, "❌ VPS tu tak ada python3. Kat VPS tu jalankan: %s lepas tu cuba lagi." % code("apt install -y python3"))
+            return
+        agent_push(v)
+        info = rpc_call_v(v, "vps_info", [], {})
+    except VPSError as e:
+        send(chat, "❌ %s" % E(e))
+        return
+    if not info.get("xray_conf"):
+        send(chat, "❌ VPS tu belum ada autoscript (tiada /etc/xray/config.json). Pasang autoscript dulu.")
+        return
+    ada = []
+    for x in vps_semua(d):
+        inf, _ = vps_status(x["id"])
+        if inf:
+            ada.append(inf.get("domain"))
+    if info.get("domain") in ada:
+        send(chat, "❌ Server tu domainnya sama (%s) dengan server yang dah ada. Itu VPS yang sama?" % code(info.get("domain", "")))
+        return
+    d["v"].append(v)
+    d["seq"] += 1
+    vps_save(d)
+    send(chat, "\n".join(["✅ Server <b>%s</b> ditambah (%s)." % (E(nama), code(vid)),
+                          "Domain: %s  •  xray: %s" % (code(info["domain"]), E(info["xray"])),
+                          "Akaun sedia ada: VLESS %d, VMess %d, Trojan %d, SSH %d" % (info["v"], info["m"], info["t"], info["s"]), "",
+                          "Pelanggan sekarang boleh pilih server masa beli dan trial.",
+                          "Nak urus akaun kat server ni sendiri: /vpspilih %s" % vid]), MAIN_KB)
+
+
+def vps_buang(chat, a):
+    if not a:
+        send(chat, "Guna: /vpsbuang ID  (ID dari /vps, contoh v2)")
+        return
+    vid = a[0].lower()
+    if vid == "local":
+        send(chat, "Server Utama tak boleh dibuang sebab bot hidup kat situ. Kalau tak nak pelanggan beli kat situ, guna /vpstutup local.")
+        return
+    d = vps_load()
+    v = vps_get(vid, d)
+    if not v:
+        send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
+        return
+    sahkan = len(a) > 1 and a[1].lower() == "ya"
+    J = jual_load()
+    T = trial_load()
+    tunggu = [o for o in J["orders"] if o.get("vps", "local") == vid and o["status"] == "menunggu_sah"]
+    if tunggu:
+        send(chat, "⚠️ Ada %d order yang dah bayar (resit dihantar) untuk server %s: %s.\nSahkan atau tolak dulu, baru buang server." % (
+            len(tunggu), E(v["nama"]), ", ".join(code(o["id"]) for o in tunggu)))
+        return
+    belum = [o for o in J["orders"] if o.get("vps", "local") == vid and o["status"] == "menunggu_bayar"]
+    akaun = [k for k in J["akaun"] if vsplit(k.split(":", 1)[1])[1] == vid]
+    trial = [r for r in T["rec"] if r.get("vps", "local") == vid]
+    if not sahkan:
+        send(chat, "\n".join([
+            "⚠️ Buang server <b>%s</b> (%s)?" % (E(v["nama"]), code(vid)), "",
+            "• %d akaun pelanggan: rekod dibuang dari bot (akaun tu masih ada kat VPS tu sampai luput, tapi pelanggan tak boleh renew lagi)" % len(akaun),
+            "• %d trial aktif: rekod dibuang" % len(trial),
+            "• %d order belum bayar: dibatalkan dan pelanggan dimaklumkan" % len(belum),
+            "• Kunci bot dibuang dari VPS tu dan salinan ejen dipadam (kalau VPS tu masih hidup)", "",
+            "Kalau pasti, taip: /vpsbuang %s ya" % vid]))
+        return
+    for o in belum:
+        o["status"] = "batal"
+        send(o["chat"], "Order %s dibatalkan sebab server tu tak ada lagi. Tekan /start untuk order semula." % code(o["id"]))
+    for k in akaun:
+        J["akaun"].pop(k, None)
+    T["rec"] = [r for r in T["rec"] if r.get("vps", "local") != vid]
+    jual_save(J)
+    trial_save(T)
+    nota = ""
+    try:
+        rc, out, err = ssh_run(v, "sed -i '/ tbot-master$/d' ~/.ssh/authorized_keys; rm -f %s; echo selesai" % AGENT, b"", 20)
+        if "selesai" in out:
+            nota = "Kunci bot dah dibuang dari VPS tu."
+        elif rc == 255:
+            raise VPSError(_ralat_ssh(err))
+        else:
+            nota = "Kunci bot tak dapat dibuang dari VPS tu (%s). Buang sendiri baris 'tbot-master' dalam ~/.ssh/authorized_keys." % E(_ralat_ssh(err))
+    except VPSError as e:
+        nota = "VPS tu tak dapat dihubungi (%s), jadi kunci bot tak sempat dibuang. Kalau VPS tu masih hidup, buang baris 'tbot-master' dalam ~/.ssh/authorized_keys." % E(e)
+    try:
+        run(["ssh-keygen", "-R", v["host"] if v["port"] == 22 else "[%s]:%d" % (v["host"], v["port"]), "-f", P(VPS_KH)])
+    except OSError:
+        pass
+    d = vps_load()
+    d["v"] = [x for x in d["v"] if x["id"] != vid]
+    d["pilih"] = {k: x for k, x in d["pilih"].items() if x != vid}
+    vps_save(d)
+    DOWN.pop(vid, None)
+    send(chat, "✅ Server <b>%s</b> dibuang dari bot.\n%s" % (E(v["nama"]), nota), MAIN_KB)
+
+
+def vps_cmd(chat, cmd, a):
+    if cmd == "/vps":
+        vps_menu(chat)
+    elif cmd == "/vpstambah":
+        vps_tambah(chat, a)
+    elif cmd == "/vpsbuang":
+        vps_buang(chat, a)
+    elif cmd == "/vpspilih":
+        if len(a) != 1:
+            send(chat, "Guna: /vpspilih ID  (ID dari /vps, contoh local atau v2)")
+        else:
+            vps_pilih(chat, a[0].lower())
+    elif cmd == "/vpsnama":
+        if len(a) < 2:
+            send(chat, "Guna: /vpsnama ID nama baru  (contoh /vpsnama v2 Singapura 1)")
+            return
+        vid = a[0].lower()
+        nama = " ".join(re.sub(r"[\x00-\x1f\x7f<>&]", " ", " ".join(a[1:])).split())
+        d = vps_load()
+        if not vps_get(vid, d):
+            send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
+        elif not 1 <= len(nama) <= 30:
+            send(chat, "Nama 1 hingga 30 aksara.")
+        else:
+            if vid == "local":
+                d["local"]["nama"] = nama
+            else:
+                for v in d["v"]:
+                    if v["id"] == vid:
+                        v["nama"] = nama
+            vps_save(d)
+            send(chat, "Nama server %s: <b>%s</b>" % (code(vid), E(nama)), MAIN_KB)
+    elif cmd in ("/vpstutup", "/vpsbuka"):
+        if len(a) != 1:
+            send(chat, "Guna: %s ID" % cmd)
+            return
+        vid = a[0].lower()
+        d = vps_load()
+        if not vps_get(vid, d):
+            send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
+            return
+        buka = cmd == "/vpsbuka"
+        if vid == "local":
+            d["local"]["buka"] = buka
+        else:
+            for v in d["v"]:
+                if v["id"] == vid:
+                    v["buka"] = buka
+        vps_save(d)
+        send(chat, "Server <b>%s</b> %s untuk pelanggan baru." % (E(vps_nama(vid)), "DIBUKA" if buka else "DITUTUP"), MAIN_KB)
+        if not vps_buka_list():
+            send(chat, "⚠️ Semua server ditutup. Pelanggan tak boleh beli atau trial sampai ada yang dibuka (/vpsbuka ID).")
+
+
+def admin_ctx(chat):
+    global CUR
+    CUR = vps_pilih_get(chat)
+
+
+def main_kb(chat):
+    try:
+        multi = vps_multi()
+        nama = vps_nama(vps_pilih_get(chat))
+    except Exception:
+        multi, nama = False, ""
+    return MAIN_KB + [[btn(("🖥 Server: %s" % nama) if multi else "🖥 Server", "m:vp")]]
+
+
+def vps_pilih_awam(chat, nxt):
+    """Untuk pelanggan. Satu server dibuka: pulang id terus. Lebih: hantar pilihan server dan pulang None. Tiada: maklumkan dan None."""
+    L = vps_buka_list()
+    if not L:
+        send(chat, "Tiada server dibuka sekarang. Cuba lagi nanti.")
+        return None
+    if len(L) == 1:
+        return L[0]["id"]
+    send(chat, "Pilih server:", rows([btn("🖥 " + v["nama"], "ks:%s:%s" % (nxt, v["id"])) for v in L], 2))
+    return None
+
+
 def handle(u):
+    global CUR
+    CUR = "local"
+    try:
+        _handle(u)
+    finally:
+        CUR = "local"
+
+
+def _handle(u):
     if "callback_query" in u:
         cq = u["callback_query"]
         msg = cq.get("message") or {}
@@ -2231,6 +3025,7 @@ def handle(u):
             return
         if cq["from"]["id"] not in ADMINS:
             return
+        admin_ctx(chat)
         on_callback(chat, data)
         return
     msg = u.get("message")
@@ -2255,12 +3050,36 @@ def handle(u):
             SEEN.add(uid)
             log("akses ditolak, ID:", uid)
         return
+    admin_ctx(chat)
     if text.startswith("/"):
         on_command(chat, text)
     elif chat in STATE:
         flow_input(chat, text)
     else:
         send(chat, "Taip /menu.", MAIN_KB)
+
+
+def proses(u):
+    """Kendalikan satu kemas kini Telegram; ralat tak ranapkan bot."""
+    try:
+        handle(u)
+    except VPSError as e:
+        log("ralat server:", e)
+        try:
+            c = (u.get("message") or (u.get("callback_query") or {}).get("message") or {}).get("chat", {}).get("id")
+            if c:
+                send(c, "⚠️ Server tak dapat dihubungi sekarang. Cuba lagi sebentar" + (" atau pilih server lain (/start)." if c not in ADMINS else ".") +
+                     (("\n" + E(e)) if c in ADMINS else ""))
+        except Exception:
+            pass
+    except Exception:
+        log("ralat:", traceback.format_exc())
+        try:
+            c = (u.get("message") or (u.get("callback_query") or {}).get("message") or {}).get("chat", {}).get("id")
+            if c:
+                send(c, "Ada ralat dalam bot. Cuba lagi atau semak: journalctl -u tbot -n 20", MAIN_KB)
+        except Exception:
+            pass
 
 
 def main():
@@ -2283,16 +3102,7 @@ def main():
             r = tg("getUpdates", **params)
             for u in r.get("result", []):
                 offset = u["update_id"] + 1
-                try:
-                    handle(u)
-                except Exception:
-                    log("ralat:", traceback.format_exc())
-                    try:
-                        c = (u.get("message") or (u.get("callback_query") or {}).get("message") or {}).get("chat", {}).get("id")
-                        if c:
-                            send(c, "Ada ralat dalam bot. Cuba lagi atau semak: journalctl -u tbot -n 20", MAIN_KB)
-                    except Exception:
-                        pass
+                proses(u)
         except KeyboardInterrupt:
             break
         except Exception as e:
@@ -2301,4 +3111,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if "--rpc" in sys.argv:
+        rpc_main()
+    else:
+        main()

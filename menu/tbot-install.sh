@@ -25,6 +25,7 @@ fi
 command -v curl >/dev/null || apt-get install -y curl >/dev/null 2>&1
 command -v python3 >/dev/null || apt-get install -y python3 >/dev/null 2>&1
 command -v python3 >/dev/null || gagal "python3 tak ada."
+command -v ssh >/dev/null && command -v ssh-keygen >/dev/null || apt-get install -y openssh-client >/dev/null 2>&1
 
 T=$(mktemp)
 curl -fsSL --max-time 30 "$RAW/tbot.py" -o "$T" || { rm -f "$T"; gagal "tak dapat muat turun tbot.py dari GitHub."; }
