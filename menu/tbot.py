@@ -1433,6 +1433,10 @@ def on_command(chat, text):
         hc_nama(chat, text)
     elif cmd == "/hcset":
         hc_set_teks(chat, text)
+    elif cmd == "/hcnota":
+        hc_nota(chat, text)
+    elif cmd == "/hcgambar":
+        hc_gambar(chat, text)
     elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
         vps_cmd(chat, cmd, a)
     elif cmd == "/senarai":
@@ -1985,7 +1989,7 @@ def trial_cmd(chat, cmd, a):
 # Tetapan dan rekod: /etc/tbot/jual.json (tiada UUID atau password disimpan di situ).
 JUAL_F = "/etc/tbot/jual.json"
 JUAL_DEF = {"aktif": False, "sen": 1000, "hari": 30, "kuota": 0, "iplimit": 2, "jenis": ["v", "m", "t", "s"], "luput": 24,
-            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}, "telco": {}, "telco_t": 0, "chan": {}, "hc": {}}
+            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}, "telco": {}, "telco_t": 0, "chan": {}, "hc": {}, "hc_nota": "", "hc_gambar": ""}
 JUAL_RANGE = {"hari": (1, 365), "kuota": (0, 9999), "ip": (0, 20), "luput": (1, 168)}
 RM_RE = re.compile(r"^\d{1,4}(\.\d{1,2})?$")
 KEDAI_SENYAP = {}
@@ -2443,6 +2447,11 @@ def kedai_media(msg):
         if w and w[0].split("@")[0].lower() == "/hcset" and msg.get("document"):
             hc_set(chat, cap, msg["document"])
             return
+        if msg.get("photo") and w and w[0].split("@")[0].lower() == "/hcgambar":
+            hc_gambar_simpan(chat, msg["photo"][-1]["file_id"])
+            return
+        if msg.get("photo") and not cap.startswith("/"):
+            HC_FOTO[chat] = {"id": msg["photo"][-1]["file_id"], "t": time.time()}
         d = msg.get("document") or {}
         if (d.get("file_name") or "").lower().endswith(".hc"):
             HC_LAST[chat] = {"doc": d, "t": time.time()}
@@ -3117,12 +3126,12 @@ def hc_hantar(chat, nama, vid):
             data = f.read()
         lbl = J["hc"][nama].get("lbl") or []
         cap = ("📱 <b>Fail HTTP Custom</b>\nBoleh guna untuk:\n" + "\n".join("• " + E(x) for x in lbl)) if lbl else "📱 <b>Fail HTTP Custom: %s</b>" % E(nama)
-        cap += ("\n\nBuka dengan HTTP Custom, isi username dan password (ada dalam mesej akaun kau), lepas tu tekan Start. Jangan kongsi fail ni.")
         tg_dokumen(chat, "%s.hc" % nama, data, cap)
     except (OSError, ValueError) as e:
         log("hc gagal:", e)
         send(chat, "Fail HTTP Custom tak dapat dihantar sekarang. Hubungi admin.")
         return False
+    hc_panduan(chat)
     return True
 
 
@@ -3160,6 +3169,69 @@ def hc_buang_vps(J, vid):
 
 
 HC_LAST = {}
+HC_FOTO = {}
+HC_NOTA_LALAI = ("Cara guna fail HTTP Custom:\n1. Buka fail .hc tadi dengan HTTP Custom.\n"
+                 "2. Isi SSH username dan password (ada dalam mesej akaun kau).\n3. Tekan Start.\nJangan kongsi fail ni.")
+
+
+def hc_panduan(chat):
+    """Lepas fail dihantar: gambar panduan (kalau ada) dengan nota sebagai kapsyen, atau nota sahaja."""
+    J = jual_load()
+    nota = J.get("hc_nota") or HC_NOTA_LALAI
+    if J.get("hc_gambar"):
+        try:
+            tg("sendPhoto", chat_id=chat, photo=J["hc_gambar"], caption=nota)
+            return
+        except Exception as e:
+            log("hc gambar gagal:", e)
+    send(chat, E(nota))
+
+
+def hc_nota(chat, text):
+    J = jual_load()
+    t = text.strip().split(None, 1)
+    rest = t[1].strip() if len(t) > 1 else ""
+    if not rest:
+        send(chat, "📝 <b>Nota cara guna</b> (dihantar lepas fail HTTP Custom)%s:\n\n%s\n\nTukar: /hcnota teks   (0 = guna nota lalai)" % (
+            "" if J.get("hc_nota") else " [lalai]", E(J.get("hc_nota") or HC_NOTA_LALAI)))
+    elif rest == "0":
+        J["hc_nota"] = ""
+        jual_save(J)
+        send(chat, "Nota guna yang lalai semula.", MAIN_KB)
+    elif len(rest) > 800:
+        send(chat, "❌ Nota terlalu panjang (maksimum 800 aksara, ini %d)." % len(rest))
+    else:
+        J["hc_nota"] = rest
+        jual_save(J)
+        send(chat, "✅ Nota disimpan:\n\n%s" % E(rest), MAIN_KB)
+
+
+def hc_gambar_simpan(chat, file_id):
+    J = jual_load()
+    J["hc_gambar"] = file_id
+    jual_save(J)
+    HC_FOTO.pop(chat, None)
+    send(chat, "✅ Gambar panduan disimpan. Bot hantar gambar ni (dengan nota sebagai kapsyen) lepas fail HTTP Custom. /hcfail nama untuk tengok macam mana pelanggan nampak.", MAIN_KB)
+
+
+def hc_gambar(chat, text):
+    J = jual_load()
+    a = text.split()[1:]
+    if a and a[0] == "0":
+        J["hc_gambar"] = ""
+        jual_save(J)
+        send(chat, "Gambar panduan dibuang. Pelanggan dapat nota sahaja.", MAIN_KB)
+        return
+    x = HC_FOTO.get(chat)
+    if x and time.time() - x["t"] <= 1800:
+        hc_gambar_simpan(chat, x["id"])
+    elif J.get("hc_gambar"):
+        try:
+            tg("sendPhoto", chat_id=chat, photo=J["hc_gambar"], caption="Gambar panduan sekarang.\nTukar: hantar gambar baru kat bot, lepas tu taip /hcgambar.   (0 = buang)")
+        except Exception:
+            send(chat, "Gambar panduan ada tapi tak dapat dipaparkan. Hantar gambar baru, lepas tu taip /hcgambar.")
+    else:
+        send(chat, "Hantar gambar panduan kat bot ni (tangkap skrin cara guna), lepas tu taip /hcgambar.")
 
 
 def hc_set_teks(chat, text):
@@ -3274,9 +3346,11 @@ def hc_cmd(chat, cmd, a):
                                                   ("\n    nama: %s" % E(", ".join(H[n]["lbl"]))) if H[n].get("lbl") else ""))
         if not H:
             L.append("Belum ada.")
+        L.append("Panduan lepas fail: %s, nota %s" % ("gambar" if J.get("hc_gambar") else "tiada gambar", "tersendiri" if J.get("hc_nota") else "lalai"))
         L += ["", "<b>Tambah</b>: dalam HTTP Custom buat config (payload dsb), hidupkan lock tapi biar bahagian Account (username/password) boleh diedit, Export. "
               "Hantar fail .hc tu kat bot ni (klip kertas > File), lepas tu taip  /hcset nama [server]  (boleh juga letak arahan ni sebagai kapsyen fail)",
               "/hcnama nama Nama satu, Nama dua - nama telco yang pelanggan nampak (0 = buang)",
+              "/hcnota teks - nota cara guna (0 = lalai).  /hcgambar - gambar panduan (hantar gambar dulu, lepas tu taip arahan; 0 = buang)",
               "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang tengah kau pilih.",
               "/hcfail nama [server] - bot hantar fail tu balik untuk uji", "/hcpadam nama [server] - buang", "/telcotak nama - sorok sementara dari pelanggan"]
         send(chat, "\n".join(L), MAIN_KB)
