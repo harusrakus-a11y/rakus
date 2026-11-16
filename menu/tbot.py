@@ -19,6 +19,7 @@ import sys
 import time
 import traceback
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid as uuidlib
@@ -1412,6 +1413,8 @@ def on_command(chat, text):
             "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
             "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
             "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
+            "/channel @nama - pelanggan kena join channel dulu sebelum Trial atau Beli (/channel 0 untuk matikan)",
+            "/hc - fail HTTP Custom berkunci untuk akaun SSH (tambah, uji, buang)",
             "/trialreset ID [padam] - bagi orang tu cuba trial semula", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
         STATE.pop(chat, None)
@@ -1422,6 +1425,10 @@ def on_command(chat, text):
         jual_cmd(chat, cmd, a)
     elif cmd in ("/telco", "/telcook", "/telcolemah", "/telcotak"):
         telco_cmd(chat, cmd, a)
+    elif cmd == "/channel":
+        chan_cmd(chat, a)
+    elif cmd in ("/hc", "/hcpadam", "/hcfail"):
+        hc_cmd(chat, cmd, a)
     elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
         vps_cmd(chat, cmd, a)
     elif cmd == "/senarai":
@@ -1664,6 +1671,8 @@ def trial_start(chat, frm, vid=None):
     if w > 0:
         send(chat, "Kau dah guna trial. Boleh minta lagi dalam %s." % trial_tempoh(w) + trial_hubung(d))
         return
+    if not channel_ok(chat, frm, "trial"):
+        return
     if vid is None:
         vid = vps_pilih_awam(chat, "trial")
         if vid is None:
@@ -1686,6 +1695,8 @@ def trial_cb(chat, frm, data):
         return
     if len(p) < 2 or p[1] not in d["jenis"]:
         send(chat, "Jenis ni tak dibuka. Taip /start.")
+        return
+    if not channel_ok(chat, frm, "trial"):
         return
     kind = p[1]
     vid = p[2] if p[0] == "pt" and len(p) > 2 else (p[3] if p[0] == "pc" and len(p) > 3 else "local")
@@ -1796,6 +1807,8 @@ def _trial_buat(chat, frm, kind, n, vid):
     d["kira"] += 1
     trial_save(d)
     send(chat, trial_msg(kind, r, tl, d["minit"], {"hubung": d.get("hubung", "")}))
+    if kind == "s":
+        hc_lepas(chat, user, vid)
     nm = E(" ".join(x for x in (frm.get("first_name", ""), ("@" + frm["username"]) if frm.get("username") else "") if x) or "-")
     note = "🎁 Trial %s%s  •  %s (<code>%d</code>)\n%s  •  aktif sekarang %d  •  hari ni %d" % (
         TRIAL_KIND[kind], ((" " + E(tl[0])) if tl else "") + vtag(vid), nm, uid, trial_tempoh(d["minit"] * 60), len(d["rec"]), d["kira"])
@@ -1968,11 +1981,11 @@ def trial_cmd(chat, cmd, a):
 # Tetapan dan rekod: /etc/tbot/jual.json (tiada UUID atau password disimpan di situ).
 JUAL_F = "/etc/tbot/jual.json"
 JUAL_DEF = {"aktif": False, "sen": 1000, "hari": 30, "kuota": 0, "iplimit": 2, "jenis": ["v", "m", "t", "s"], "luput": 24,
-            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}, "telco": {}, "telco_t": 0}
+            "qr": "", "nota": "", "seq": 0, "orders": [], "akaun": {}, "telco": {}, "telco_t": 0, "chan": {}, "hc": {}}
 JUAL_RANGE = {"hari": (1, 365), "kuota": (0, 9999), "ip": (0, 20), "luput": (1, 168)}
 RM_RE = re.compile(r"^\d{1,4}(\.\d{1,2})?$")
 KEDAI_SENYAP = {}
-KEDAI_CB = ("ky:", "ks:", "kb:", "kc:", "kr:", "ka:", "kt:", "kx:")
+KEDAI_CB = ("ky:", "ks:", "kb:", "kc:", "kj:", "kr:", "ka:", "kt:", "kx:", "kh:")
 TELCO_ST = {"ok": "✅", "lemah": "⚠️", "tak": "❌"}
 
 
@@ -2018,11 +2031,12 @@ def telco_status(J, name):
 
 def telco_senarai_pelanggan(J, boleh_trial):
     T = telcos_utama()
-    if not T:
+    NM = [(x[0], telco_nama(x)) for x in T] + [(n, n + " (SSH)") for n in sorted(J.get("hc", {}))]
+    if not NM:
         return "Belum ada telco disediakan. Pilih link biasa."
-    ok = [telco_nama(x) for x in T if telco_status(J, x[0]) == "ok"]
-    lm = [telco_nama(x) for x in T if telco_status(J, x[0]) == "lemah"]
-    tk = [telco_nama(x) for x in T if telco_status(J, x[0]) == "tak"]
+    ok = [l for n, l in NM if telco_status(J, n) == "ok"]
+    lm = [l for n, l in NM if telco_status(J, n) == "lemah"]
+    tk = [l for n, l in NM if telco_status(J, n) == "tak"]
     L = ["📶 <b>Telco yang berfungsi</b>", "✅ Berfungsi: %s" % (E(", ".join(ok)) if ok else "tiada")]
     if lm:
         L.append("⚠️ Kadang-kadang / lemah: %s" % E(", ".join(lm)))
@@ -2037,9 +2051,10 @@ def telco_senarai_pelanggan(J, boleh_trial):
 def telco_admin_msg(J):
     T = telcos_utama()
     L = ["📶 <b>Status telco</b>  (pelanggan nampak ini)"]
-    for i, x in enumerate(T):
-        L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, x[0])], E(telco_nama(x))))
-    if not T:
+    NM = [(x[0], telco_nama(x)) for x in T] + [(n, n + " (SSH, fail HTTP Custom)") for n in sorted(J.get("hc", {}))]
+    for i, (n, lab) in enumerate(NM):
+        L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, n)], E(lab)))
+    if not NM:
         L.append("(tiada telco dalam telco.conf)")
     L += ["", "✅ berfungsi   ⚠️ lemah (boleh dipilih, ada amaran)   ❌ tak berfungsi (disorok dari pilihan)",
           "/telcook nama [nama ...]", "/telcolemah nama", "/telcotak nama",
@@ -2231,12 +2246,14 @@ def jual_butiran(kind, user, a, kepala="Akaun %s", telco=""):
     return "\n".join(t)
 
 
-def jual_hantar_akaun(chat, kind, user, kepala, telco="", vid="local"):
+def jual_hantar_akaun(chat, kind, user, kepala, telco="", vid="local", fail=True):
     with on(vid):
         a = find(kind, user)
         if not a:
             return
         send(chat, jual_butiran(kind, user, a, kepala, telco), jual_kb_telco(kind, user) if kind != "s" else None)
+    if kind == "s" and fail:
+        hc_lepas(chat, user, vid)
 
 
 def jual_pilih_jenis(chat, J, vid):
@@ -2269,7 +2286,14 @@ def kedai_cb(chat, frm, data):
         return
     p = data.split(":")
     k = p[0]
-    if k == "ky" and len(p) == 2:
+    if (k == "ky" and len(p) == 2 and p[1] in ("trial", "beli")) or k in ("ks", "kb", "kc"):
+        what = "trial" if (k == "ky" and p[1] == "trial") or (k == "ks" and len(p) > 1 and p[1] == "trial") else "beli"
+        if not channel_ok(chat, frm, what):
+            return
+    if k == "kj" and len(p) == 2 and p[1] in ("trial", "beli"):
+        if channel_ok(chat, frm, p[1], True):
+            kedai_cb(chat, frm, "ky:" + p[1])
+    elif k == "ky" and len(p) == 2:
         if p[1] == "trial":
             trial_start(chat, frm)
         elif p[1] == "telco":
@@ -2352,6 +2376,18 @@ def kedai_cb(chat, frm, data):
             send(chat, "Akaun tu dah dipadam. Tekan Beli akaun untuk beli baru.")
             return
         jual_order_baru(chat, frm, p[1], "renew", u, vid=vid)
+    elif k == "kh" and len(p) == 3:
+        u, vid = vsplit(p[2])
+        milik = adm or J["akaun"].get(akey("s", u, vid)) == uid or any(
+            r["user"] == u and r["uid"] == uid and r["kind"] == "s" and r.get("vps", "local") == vid for r in T["rec"])
+        if not milik:
+            return
+        if vid not in hc_vids(J, p[1]):
+            send(chat, "Fail tu tak ada untuk server ni. Taip /start.")
+        elif telco_status(J, p[1]) == "tak":
+            send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(p[1]))
+        else:
+            hc_hantar(chat, p[1], vid)
     elif k == "ka" and len(p) == 3 and p[1] in TRIAL_KIND:
         u, vid = vsplit(p[2])
         if J["akaun"].get(akey(p[1], u, vid)) != uid:
@@ -2399,6 +2435,10 @@ def kedai_media(msg):
     uid = msg["from"]["id"]
     cap = (msg.get("caption") or "").strip()
     if uid in ADMINS:
+        w = cap.split()
+        if w and w[0].split("@")[0].lower() == "/hcset" and msg.get("document"):
+            hc_set(chat, w[1:], msg["document"])
+            return
         if cap.split("@")[0].lower() == "/setqr" and msg.get("photo"):
             J = jual_load()
             J["qr"] = msg["photo"][-1]["file_id"]
@@ -2472,7 +2512,7 @@ def jual_sahkan(oid, adm_chat):
         o["status"], o["siap_t"], o["akaun"] = "siap", time.time(), u
         jual_save(J)
         try:
-            jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s", vid=vid)
+            jual_hantar_akaun(o["chat"], kind, u, "Renew berjaya: akaun %s", vid=vid, fail=False)
         except VPSError as e:
             send(adm_chat, "⚠️ Renew siap tapi butiran tak dapat dihantar kat pelanggan (%s). Dia boleh tekan Akaun saya." % E(e))
         send(adm_chat, "✅ Order %s disahkan: renew %s %s +%d hari.%s" % (code(oid), TRIAL_KIND[kind], code(u), o["hari"], vtag(vid)), MAIN_KB)
@@ -2573,6 +2613,7 @@ def telco_cmd(chat, cmd, a):
         return
     st = {"/telcook": "ok", "/telcolemah": "lemah", "/telcotak": "tak"}[cmd]
     T = telcos_utama()
+    T = T + [(n,) for n in sorted(J.get("hc", {})) if n not in [x[0] for x in T]]
     if not a:
         send(chat, "Guna: %s nama [nama ...]  (atau nombor, atau  semua).  Taip /telco untuk senarai." % cmd)
         return
@@ -2890,6 +2931,7 @@ def vps_buang(chat, a):
         send(o["chat"], "Order %s dibatalkan sebab server tu tak ada lagi. Tekan /start untuk order semula." % code(o["id"]))
     for k in akaun:
         J["akaun"].pop(k, None)
+    hc_buang_vps(J, vid)
     T["rec"] = [r for r in T["rec"] if r.get("vps", "local") != vid]
     jual_save(J)
     trial_save(T)
@@ -2994,6 +3036,300 @@ def vps_pilih_awam(chat, nxt):
         return L[0]["id"]
     send(chat, "Pilih server:", rows([btn("🖥 " + v["nama"], "ks:%s:%s" % (nxt, v["id"])) for v in L], 2))
     return None
+
+
+# ---------------------------------------------------------------- wajib join channel
+# Pelanggan kena jadi ahli channel kau sebelum boleh Trial atau Beli. Bot mesti jadi admin channel tu (supaya boleh semak ahli).
+# Admin tak disekat. Renew, Akaun saya dan Telco berfungsi tak disekat. Kalau semakan gagal (bot bukan admin lagi dll), semua orang dibenarkan dan admin dimaklumkan.
+# ---------------------------------------------------------------- HTTP Custom (.hc) berkunci
+# Admin buat fail .hc berkunci dalam app HTTP Custom (payload tersembunyi, bahagian Account dibiar boleh diedit),
+# lepas tu hantar kat bot dengan kapsyen  /hcset nama [server]. Bot simpan fail sebijik (TAK dibuka, TAK diubah) dan hantar kat
+# pelanggan SSH bersama butiran akaun. Pelanggan isi username dan password sendiri dalam app.
+# Satu fail untuk setiap telco setiap server, sebab payload ada domain server.
+HC_DIR = "/etc/tbot/hc"
+HC_NAMA = re.compile(r"^[a-z0-9][a-z0-9-]{1,19}$")
+HC_MAX = 200000
+
+
+def hc_path(nama, vid):
+    return P("%s/%s.%s.hc" % (HC_DIR, nama, vid))
+
+
+def hc_vids(J, nama):
+    return J.get("hc", {}).get(nama, {}).get("v", {})
+
+
+def hc_boleh(J, vid):
+    """Nama telco SSH yang ada fail untuk server vid dan tak ditanda tak berfungsi."""
+    return [n for n in sorted(J.get("hc", {})) if vid in hc_vids(J, n) and telco_status(J, n) != "tak"]
+
+
+def tg_ambil(file_id):
+    r = tg("getFile", file_id=file_id)["result"]
+    with urllib.request.urlopen("%s/file/bot%s/%s" % (API, TOKEN, r["file_path"]), timeout=30) as f:
+        return f.read(HC_MAX + 1)
+
+
+def tg_dokumen(chat, nama, data, caption=""):
+    b = "kancil" + secrets.token_hex(10)
+    body = b""
+    for k, v in (("chat_id", str(chat)), ("caption", caption), ("parse_mode", "HTML")):
+        body += ('--%s\r\nContent-Disposition: form-data; name="%s"\r\n\r\n%s\r\n' % (b, k, v)).encode()
+    body += ('--%s\r\nContent-Disposition: form-data; name="document"; filename="%s"\r\n'
+             'Content-Type: application/octet-stream\r\n\r\n' % (b, nama)).encode() + data + ("\r\n--%s--\r\n" % b).encode()
+    req = urllib.request.Request("%s/bot%s/sendDocument" % (API, TOKEN), body,
+                                 {"Content-Type": "multipart/form-data; boundary=" + b})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        return json.load(r)
+
+
+def hc_hantar(chat, nama, vid):
+    J = jual_load()
+    if vid not in hc_vids(J, nama):
+        return False
+    try:
+        with open(hc_path(nama, vid), "rb") as f:
+            data = f.read()
+        tg_dokumen(chat, "%s.hc" % nama, data, "📱 <b>Fail HTTP Custom: %s</b>\nBuka dengan HTTP Custom, isi username dan password "
+                   "(ada dalam mesej akaun kau), lepas tu tekan Start. Jangan kongsi fail ni." % E(nama))
+    except (OSError, ValueError) as e:
+        log("hc gagal:", e)
+        send(chat, "Fail HTTP Custom tak dapat dihantar sekarang. Hubungi admin.")
+        return False
+    return True
+
+
+def hc_lepas(chat, user, vid):
+    """Lepas akaun SSH dihantar: satu telco = terus hantar fail; lebih satu = butang pilih."""
+    J = jual_load()
+    H = hc_boleh(J, vid)
+    if len(H) == 1:
+        hc_hantar(chat, H[0], vid)
+    elif H:
+        tok = user + vsuf(vid)
+        send(chat, "📱 Pilih telco untuk fail HTTP Custom (akaun SSH kau):",
+             rows([btn(("" if telco_status(J, n) == "ok" else TELCO_ST[telco_status(J, n)] + " ") + n, "kh:%s:%s" % (n, tok)) for n in H], 2))
+
+
+def hc_padam_fail(J, nama, vid=None):
+    """Buang fail telco nama (satu server, atau semua kalau vid kosong). Telco tanpa fail langsung dibuang terus."""
+    v = hc_vids(J, nama)
+    for x in ([vid] if vid else list(v)):
+        if x in v:
+            v.pop(x)
+            try:
+                os.remove(hc_path(nama, x))
+            except OSError:
+                pass
+    if not v:
+        J.get("hc", {}).pop(nama, None)
+        J["telco"].pop(nama, None)
+
+
+def hc_buang_vps(J, vid):
+    for n in list(J.get("hc", {})):
+        if vid in hc_vids(J, n):
+            hc_padam_fail(J, n, vid)
+
+
+def hc_set(chat, a, doc):
+    if not a or not HC_NAMA.match(a[0].lower()):
+        send(chat, "Guna: hantar fail .hc dengan kapsyen  /hcset nama [server]\nNama: huruf kecil, nombor, sengkang (2-20 aksara), contoh celcom-sg.\n"
+                   "Server: ID dari /vps (contoh v2). Kalau kosong, guna server yang tengah kau pilih.")
+        return
+    nama = a[0].lower()
+    vid = a[1].lower() if len(a) > 1 else vps_pilih_get(chat)
+    if not vps_get(vid):
+        send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
+        return
+    if not (doc.get("file_name") or "").lower().endswith(".hc"):
+        send(chat, "❌ Itu bukan fail .hc. Export fail dari HTTP Custom.")
+        return
+    if (doc.get("file_size") or 0) > HC_MAX:
+        send(chat, "❌ Fail terlalu besar untuk fail .hc.")
+        return
+    try:
+        raw = tg_ambil(doc["file_id"])
+    except Exception as e:
+        send(chat, "❌ Tak dapat ambil fail dari Telegram: %s" % E(str(e)[:150]))
+        return
+    if not raw or len(raw) > HC_MAX:
+        send(chat, "❌ Fail kosong atau terlalu besar.")
+        return
+    os.makedirs(P(HC_DIR), mode=0o700, exist_ok=True)
+    p = hc_path(nama, vid)
+    with open(p + ".tmp", "wb") as f:
+        f.write(raw)
+    os.chmod(p + ".tmp", 0o600)
+    os.replace(p + ".tmp", p)
+    J = jual_load()
+    ada = vid in hc_vids(J, nama)
+    J["hc"].setdefault(nama, {"v": {}}).setdefault("v", {})[vid] = {"t": time.time(), "n": len(raw)}
+    jual_save(J)
+    dom = ""
+    try:
+        with on(vid):
+            dom = domain()
+    except VPSError:
+        pass
+    L = ["✅ Fail %s untuk server <b>%s</b> %s." % (code(nama), E(vps_nama(vid)), "dikemas kini" if ada else "disimpan"),
+         "Bot simpan fail sebijik, tak buka. Pelanggan SSH di server ni dapat fail ni lepas beli atau trial."]
+    if dom:
+        L.append("Pastikan payload dalam fail ni guna domain server ni: %s" % code(dom))
+    L += ["", "Uji: /hcfail %s %s  (bot hantar fail tu balik, import dalam HTTP Custom)" % (nama, vid),
+          "/telcotak %s untuk sorok sementara dari pelanggan." % nama]
+    send(chat, "\n".join(L), MAIN_KB)
+
+
+def hc_cmd(chat, cmd, a):
+    J = jual_load()
+    H = J["hc"]
+    if cmd == "/hc":
+        L = ["📱 <b>Fail HTTP Custom berkunci</b> (akaun SSH)"]
+        buka = [v["id"] for v in vps_semua() if v["buka"]]
+        for n in sorted(H):
+            ada = [x for x in hc_vids(J, n) if vps_get(x)]
+            kurang = [vps_nama(x) for x in buka if x not in ada]
+            L.append("%s %s  • server: %s%s" % (TELCO_ST[telco_status(J, n)], code(n), E(", ".join(vps_nama(x) for x in ada) or "-"),
+                                                ("  • belum ada untuk: %s" % E(", ".join(kurang))) if kurang and vps_multi() else ""))
+        if not H:
+            L.append("Belum ada.")
+        L += ["", "<b>Tambah</b>: dalam HTTP Custom buat config (payload dsb), hidupkan lock tapi biar bahagian Account (username/password) boleh diedit, Export. "
+              "Hantar fail .hc tu kat bot ni dengan kapsyen  /hcset nama [server]",
+              "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang tengah kau pilih.",
+              "/hcfail nama [server] - bot hantar fail tu balik untuk uji", "/hcpadam nama [server] - buang", "/telcotak nama - sorok sementara dari pelanggan"]
+        send(chat, "\n".join(L), MAIN_KB)
+        return
+    n = a[0].lower() if a else ""
+    if n not in H:
+        send(chat, "Guna: %s nama [server]\nSenarai: %s" % (cmd, E(", ".join(sorted(H)) or "(belum ada, taip /hc)")))
+        return
+    vid = a[1].lower() if len(a) > 1 else (None if cmd == "/hcpadam" else vps_pilih_get(chat))
+    if vid and vid not in hc_vids(J, n):
+        send(chat, "Fail %s tak ada untuk server %s. Ada untuk: %s" % (code(n), code(vid[:20]), E(", ".join(hc_vids(J, n)) or "-")))
+        return
+    if cmd == "/hcpadam":
+        hc_padam_fail(J, n, vid)
+        jual_save(J)
+        send(chat, "Fail %s dibuang%s." % (code(n), (" untuk server " + E(vps_nama(vid))) if vid else " (semua server)"), MAIN_KB)
+        return
+    if not hc_hantar(chat, n, vid):
+        send(chat, "❌ Gagal hantar fail.")
+
+
+CH_USER = re.compile(r"^@[A-Za-z][A-Za-z0-9_]{3,31}$")
+CH_ID = re.compile(r"^-100[0-9]{5,15}$")
+CH_LINK = re.compile(r"^https://t\.me/[A-Za-z0-9_+/-]{3,64}$")
+CHAN_OK = {}
+CHAN_AMARAN = [0.0]
+
+
+def tg_coba(method, **p):
+    """Panggil API Telegram tanpa melontar ralat. Pulang (berjaya, hasil atau sebab)."""
+    try:
+        r = tg(method, **p)
+        return bool(r.get("ok")), r.get("result")
+    except urllib.error.HTTPError as e:
+        try:
+            d = json.load(e).get("description", "")
+        except Exception:
+            d = ""
+        return False, d or "HTTP %d" % e.code
+    except Exception as e:
+        return False, str(e)
+
+
+def chan_semak(uid, c):
+    """True = ahli, False = bukan ahli, None = tak dapat semak."""
+    ok, r = tg_coba("getChatMember", chat_id=c["id"], user_id=uid)
+    if not ok or not isinstance(r, dict):
+        return None, str(r)
+    st = r.get("status")
+    if st in ("creator", "administrator", "member"):
+        return True, ""
+    if st == "restricted":
+        return bool(r.get("is_member")), ""
+    return False, ""
+
+
+def chan_amaran(sebab):
+    if time.time() - CHAN_AMARAN[0] < 3600:
+        return
+    CHAN_AMARAN[0] = time.time()
+    log("semak channel gagal:", sebab)
+    for a in ADMINS:
+        send(a, "⚠️ Bot tak dapat semak ahli channel (%s). Pastikan bot masih admin channel tu. Sementara ni semua orang dibenarkan guna bot." % E(sebab[:100]))
+
+
+def channel_ok(chat, frm, what, ulang=False):
+    """Benarkan pelanggan teruskan Trial atau Beli? Kalau belum join, hantar arahan join dan pulang False."""
+    uid = frm["id"]
+    if uid in ADMINS:
+        return True
+    c = jual_load().get("chan") or {}
+    if not c.get("id"):
+        return True
+    if CHAN_OK.get(uid, 0) > time.time():
+        return True
+    r, sebab = chan_semak(uid, c)
+    if r is None:
+        chan_amaran(sebab)
+        return True
+    if r:
+        if len(CHAN_OK) > 5000:
+            CHAN_OK.clear()
+        CHAN_OK[uid] = time.time() + 600
+        return True
+    send(chat, ("Belum nampak kau dalam channel lagi. " if ulang else "") +
+         "📢 Untuk guna %s, join channel <b>%s</b> dulu. Lepas join, tekan ✅ Dah join." % ("Trial" if what == "trial" else "Beli akaun", E(c.get("nama") or c["id"])),
+         [[{"text": "📢 Join channel", "url": c["link"]}], [btn("✅ Dah join", "kj:%s" % what)]])
+    return False
+
+
+def chan_cmd(chat, a):
+    J = jual_load()
+    c = J.get("chan") or {}
+    guna = "Guna: /channel @namachannel   (channel awam)\n/channel -100123456789 https://t.me/+pautan   (channel peribadi)\n/channel 0   (matikan)"
+    if not a:
+        if c.get("id"):
+            send(chat, "📢 Wajib join channel: <b>HIDUP</b>\nChannel: %s (%s)\nPautan: %s\n\nSekat: Trial dan Beli akaun. Tak disekat: Renew, Akaun saya, Telco berfungsi, admin.\n\n%s" % (
+                E(c.get("nama", "")), E(c["id"]), E(c["link"]), guna), MAIN_KB)
+        else:
+            send(chat, "📢 Wajib join channel: <b>MATI</b>\n\nCara hidupkan: (1) jadikan bot ni admin channel kau (Channel > Administrators > Add Admin > pilih bot), (2) taip /channel @namachannel\n\n" + guna, MAIN_KB)
+        return
+    if a[0] == "0" and len(a) == 1:
+        J["chan"] = {}
+        jual_save(J)
+        CHAN_OK.clear()
+        send(chat, "Wajib join channel dimatikan.", MAIN_KB)
+        return
+    ident = a[0]
+    link = a[1] if len(a) > 1 else ""
+    if len(a) > 2:
+        send(chat, guna)
+        return
+    if CH_USER.match(ident):
+        link = "https://t.me/" + ident[1:]
+    elif CH_ID.match(ident):
+        if not CH_LINK.match(link):
+            send(chat, "Channel peribadi perlu pautan jemputan sekali.\n" + guna)
+            return
+    else:
+        send(chat, guna)
+        return
+    ok, info = tg_coba("getChat", chat_id=ident)
+    if not ok or not isinstance(info, dict):
+        send(chat, "❌ Channel %s tak dijumpai (%s). Semak nama channel." % (code(ident), E(str(info)[:100])))
+        return
+    botid = int(TOKEN.split(":")[0]) if TOKEN[:1].isdigit() else 0
+    ok, m = tg_coba("getChatMember", chat_id=ident, user_id=botid)
+    if not ok or not isinstance(m, dict) or m.get("status") not in ("administrator", "creator"):
+        send(chat, "❌ Bot belum jadi admin channel tu. Buka channel > Administrators > Add Admin > pilih bot ni > simpan. Lepas tu taip semula arahan tadi.")
+        return
+    J["chan"] = {"id": ident, "link": link, "nama": info.get("title") or ident}
+    jual_save(J)
+    CHAN_OK.clear()
+    send(chat, "✅ Wajib join channel HIDUP: <b>%s</b>\nPelanggan kena join dulu sebelum Trial atau Beli akaun. Admin dan pelanggan lama (renew) tak disekat.\n/channel 0 untuk matikan." % E(J["chan"]["nama"]), MAIN_KB)
 
 
 def handle(u):
