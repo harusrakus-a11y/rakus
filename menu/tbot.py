@@ -1414,7 +1414,7 @@ def on_command(chat, text):
             "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
             "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
             "/channel @nama - pelanggan kena join channel dulu sebelum Trial atau Beli (/channel 0 untuk matikan)",
-            "/hc - fail HTTP Custom berkunci untuk akaun SSH (tambah, uji, buang)",
+            "/hc - fail HTTP Custom berkunci untuk akaun SSH (tambah, nama telco, uji, buang)",
             "/trialreset ID [padam] - bagi orang tu cuba trial semula", "/batal - berhenti soalan"]))
     elif cmd == "/batal":
         STATE.pop(chat, None)
@@ -1429,6 +1429,8 @@ def on_command(chat, text):
         chan_cmd(chat, a)
     elif cmd in ("/hc", "/hcpadam", "/hcfail"):
         hc_cmd(chat, cmd, a)
+    elif cmd == "/hcnama":
+        hc_nama(chat, text)
     elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
         vps_cmd(chat, cmd, a)
     elif cmd == "/senarai":
@@ -2031,7 +2033,7 @@ def telco_status(J, name):
 
 def telco_senarai_pelanggan(J, boleh_trial):
     T = telcos_utama()
-    NM = [(x[0], telco_nama(x)) for x in T] + [(n, n + " (SSH)") for n in sorted(J.get("hc", {}))]
+    NM = [(x[0], telco_nama(x)) for x in T] + [(n, hc_tajuk(J, n) + " (SSH)") for n in sorted(J.get("hc", {}))]
     if not NM:
         return "Belum ada telco disediakan. Pilih link biasa."
     ok = [l for n, l in NM if telco_status(J, n) == "ok"]
@@ -2437,7 +2439,7 @@ def kedai_media(msg):
     if uid in ADMINS:
         w = cap.split()
         if w and w[0].split("@")[0].lower() == "/hcset" and msg.get("document"):
-            hc_set(chat, w[1:], msg["document"])
+            hc_set(chat, cap, msg["document"])
             return
         if cap.split("@")[0].lower() == "/setqr" and msg.get("photo"):
             J = jual_load()
@@ -3059,6 +3061,21 @@ def hc_vids(J, nama):
     return J.get("hc", {}).get(nama, {}).get("v", {})
 
 
+def hc_tajuk(J, n):
+    """Nama yang pelanggan nampak: senarai nama telco yang admin tetapkan, atau nama pendek kalau tiada."""
+    l = J.get("hc", {}).get(n, {}).get("lbl") or []
+    return ", ".join(l) if l else n
+
+
+def hc_items(t):
+    """Teks (baris atau koma) -> (senarai nama, ralat)."""
+    items = [re.sub(r"\s+", " ", y).strip() for x in t.split("\n") for y in x.split(",")]
+    items = [y for y in items if y]
+    if len(items) > 8 or any(len(y) > 40 for y in items):
+        return [], "Maksimum 8 nama, setiap satu 40 aksara."
+    return items, ""
+
+
 def hc_boleh(J, vid):
     """Nama telco SSH yang ada fail untuk server vid dan tak ditanda tak berfungsi."""
     return [n for n in sorted(J.get("hc", {})) if vid in hc_vids(J, n) and telco_status(J, n) != "tak"]
@@ -3090,8 +3107,10 @@ def hc_hantar(chat, nama, vid):
     try:
         with open(hc_path(nama, vid), "rb") as f:
             data = f.read()
-        tg_dokumen(chat, "%s.hc" % nama, data, "📱 <b>Fail HTTP Custom: %s</b>\nBuka dengan HTTP Custom, isi username dan password "
-                   "(ada dalam mesej akaun kau), lepas tu tekan Start. Jangan kongsi fail ni." % E(nama))
+        lbl = J["hc"][nama].get("lbl") or []
+        cap = ("📱 <b>Fail HTTP Custom</b>\nBoleh guna untuk:\n" + "\n".join("• " + E(x) for x in lbl)) if lbl else "📱 <b>Fail HTTP Custom: %s</b>" % E(nama)
+        cap += ("\n\nBuka dengan HTTP Custom, isi username dan password (ada dalam mesej akaun kau), lepas tu tekan Start. Jangan kongsi fail ni.")
+        tg_dokumen(chat, "%s.hc" % nama, data, cap)
     except (OSError, ValueError) as e:
         log("hc gagal:", e)
         send(chat, "Fail HTTP Custom tak dapat dihantar sekarang. Hubungi admin.")
@@ -3108,7 +3127,7 @@ def hc_lepas(chat, user, vid):
     elif H:
         tok = user + vsuf(vid)
         send(chat, "📱 Pilih telco untuk fail HTTP Custom (akaun SSH kau):",
-             rows([btn(("" if telco_status(J, n) == "ok" else TELCO_ST[telco_status(J, n)] + " ") + n, "kh:%s:%s" % (n, tok)) for n in H], 2))
+             rows([btn(("" if telco_status(J, n) == "ok" else TELCO_ST[telco_status(J, n)] + " ") + hc_tajuk(J, n), "kh:%s:%s" % (n, tok)) for n in H], 2))
 
 
 def hc_padam_fail(J, nama, vid=None):
@@ -3132,13 +3151,25 @@ def hc_buang_vps(J, vid):
             hc_padam_fail(J, n, vid)
 
 
-def hc_set(chat, a, doc):
-    if not a or not HC_NAMA.match(a[0].lower()):
+def hc_set(chat, cap, doc):
+    """cap: '/hcset nama [server] [nama telco, ...]' dan baris tambahan = nama telco yang pelanggan nampak."""
+    baris = [x.strip() for x in cap.strip().split("\n")]
+    w = baris[0].split()[1:]
+    if not w or not HC_NAMA.match(w[0].lower()):
         send(chat, "Guna: hantar fail .hc dengan kapsyen  /hcset nama [server]\nNama: huruf kecil, nombor, sengkang (2-20 aksara), contoh celcom-sg.\n"
-                   "Server: ID dari /vps (contoh v2). Kalau kosong, guna server yang tengah kau pilih.")
+                   "Server: ID dari /vps (contoh v2). Kalau kosong, guna server yang tengah kau pilih.\n"
+                   "Nama telco untuk pelanggan (pilihan): tulis selepas server, asing dengan koma atau baris baru.")
         return
-    nama = a[0].lower()
-    vid = a[1].lower() if len(a) > 1 else vps_pilih_get(chat)
+    nama = w[0].lower()
+    rest = w[1:]
+    vid = None
+    if rest and re.match(r"^(local|v\d{1,4})$", rest[0].lower()):
+        vid, rest = rest[0].lower(), rest[1:]
+    vid = vid or vps_pilih_get(chat)
+    items, err = hc_items("\n".join([" ".join(rest)] + baris[1:]))
+    if err:
+        send(chat, "❌ " + err)
+        return
     if not vps_get(vid):
         send(chat, "Server %s tak jumpa. Taip /vps." % code(vid[:20]))
         return
@@ -3164,7 +3195,10 @@ def hc_set(chat, a, doc):
     os.replace(p + ".tmp", p)
     J = jual_load()
     ada = vid in hc_vids(J, nama)
-    J["hc"].setdefault(nama, {"v": {}}).setdefault("v", {})[vid] = {"t": time.time(), "n": len(raw)}
+    ent = J["hc"].setdefault(nama, {"v": {}})
+    ent.setdefault("v", {})[vid] = {"t": time.time(), "n": len(raw)}
+    if items:
+        ent["lbl"] = items
     jual_save(J)
     dom = ""
     try:
@@ -3174,11 +3208,35 @@ def hc_set(chat, a, doc):
         pass
     L = ["✅ Fail %s untuk server <b>%s</b> %s." % (code(nama), E(vps_nama(vid)), "dikemas kini" if ada else "disimpan"),
          "Bot simpan fail sebijik, tak buka. Pelanggan SSH di server ni dapat fail ni lepas beli atau trial."]
+    L.append(("Nama telco untuk pelanggan: %s" % E(", ".join(ent["lbl"]))) if ent.get("lbl") else
+             "Nama telco untuk pelanggan: belum ada. Tetapkan dengan  /hcnama %s Nama satu, Nama dua" % nama)
     if dom:
         L.append("Pastikan payload dalam fail ni guna domain server ni: %s" % code(dom))
     L += ["", "Uji: /hcfail %s %s  (bot hantar fail tu balik, import dalam HTTP Custom)" % (nama, vid),
           "/telcotak %s untuk sorok sementara dari pelanggan." % nama]
     send(chat, "\n".join(L), MAIN_KB)
+
+
+def hc_nama(chat, text):
+    J = jual_load()
+    t = text.strip().split(None, 2)
+    nama = t[1].lower() if len(t) > 1 else ""
+    if nama not in J["hc"]:
+        send(chat, "Guna: /hcnama nama Nama satu, Nama dua, ...   (0 = buang)\nSenarai: %s" % E(", ".join(sorted(J["hc"])) or "(belum ada, taip /hc)"))
+        return
+    rest = t[2].strip() if len(t) > 2 else ""
+    if rest == "0":
+        J["hc"][nama].pop("lbl", None)
+        jual_save(J)
+        send(chat, "Nama telco untuk %s dibuang. Pelanggan nampak: %s" % (code(nama), code(nama)), MAIN_KB)
+        return
+    items, err = hc_items(rest)
+    if err or not items:
+        send(chat, "❌ %s\nGuna: /hcnama %s Nama satu, Nama dua, ...   (0 = buang)" % (E(err or "Tiada nama."), nama))
+        return
+    J["hc"][nama]["lbl"] = items
+    jual_save(J)
+    send(chat, "✅ Pelanggan akan nampak fail %s sebagai:\n%s" % (code(nama), "\n".join("• " + E(x) for x in items)), MAIN_KB)
 
 
 def hc_cmd(chat, cmd, a):
@@ -3190,12 +3248,14 @@ def hc_cmd(chat, cmd, a):
         for n in sorted(H):
             ada = [x for x in hc_vids(J, n) if vps_get(x)]
             kurang = [vps_nama(x) for x in buka if x not in ada]
-            L.append("%s %s  • server: %s%s" % (TELCO_ST[telco_status(J, n)], code(n), E(", ".join(vps_nama(x) for x in ada) or "-"),
-                                                ("  • belum ada untuk: %s" % E(", ".join(kurang))) if kurang and vps_multi() else ""))
+            L.append("%s %s  • server: %s%s%s" % (TELCO_ST[telco_status(J, n)], code(n), E(", ".join(vps_nama(x) for x in ada) or "-"),
+                                                  ("  • belum ada untuk: %s" % E(", ".join(kurang))) if kurang and vps_multi() else "",
+                                                  ("\n    nama: %s" % E(", ".join(H[n]["lbl"]))) if H[n].get("lbl") else ""))
         if not H:
             L.append("Belum ada.")
         L += ["", "<b>Tambah</b>: dalam HTTP Custom buat config (payload dsb), hidupkan lock tapi biar bahagian Account (username/password) boleh diedit, Export. "
               "Hantar fail .hc tu kat bot ni dengan kapsyen  /hcset nama [server]",
+              "/hcnama nama Nama satu, Nama dua - nama telco yang pelanggan nampak (0 = buang)",
               "Satu fail untuk setiap server (payload ada domain server tu). Server kosong = server yang tengah kau pilih.",
               "/hcfail nama [server] - bot hantar fail tu balik untuk uji", "/hcpadam nama [server] - buang", "/telcotak nama - sorok sementara dari pelanggan"]
         send(chat, "\n".join(L), MAIN_KB)
