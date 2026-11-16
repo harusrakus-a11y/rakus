@@ -222,6 +222,7 @@ local u=$1 nm=$2 sel=$3 n=0 name addr host pth port typ js
 while IFS='|' read -r name addr host pth port typ; do
 [[ -z $name || $name == \#* ]] && continue
 typ=${typ:-ws}
+[[ $typ != ws ]] && continue
 n=$((n+1))
 if [[ $sel != 0 && $sel != $n ]]; then continue; fi
 addr=${addr//\{domain\}/$domain}
@@ -285,8 +286,9 @@ telco_init
 echo ""
 echo "Pilih telco untuk link tambahan:"
 ti=0
-while IFS='|' read -r tn _; do
+while IFS='|' read -r tn _ _ _ _ tty; do
 [[ -z $tn || $tn == \#* ]] && continue
+[[ -n $tty && $tty != ws ]] && continue
 ti=$((ti+1))
 echo " $ti) $tn"
 done < $telco_conf
@@ -584,8 +586,9 @@ telco_init
 echo ""
 echo "Pilih telco untuk link tambahan:"
 ti=0
-while IFS='|' read -r tn _; do
+while IFS='|' read -r tn _ _ _ _ tty; do
 [[ -z $tn || $tn == \#* ]] && continue
+[[ -n $tty && $tty != ws ]] && continue
 ti=$((ti+1))
 echo " $ti) $tn"
 done < $telco_conf
@@ -1292,8 +1295,9 @@ ti=0
 kn_top
 kn_title "TAPIS IKUT TELCO"
 kn_mid
-while IFS='|' read -r tn _; do
+while IFS='|' read -r tn _ _ _ _ tty; do
 [[ -z $tn || $tn == \#* ]] && continue
+[[ -n $tty && $tty != ws ]] && continue
 ti=$((ti+1))
 kn_item1 "$ti" "$tn"
 done < $telco_conf

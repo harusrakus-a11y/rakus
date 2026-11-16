@@ -315,6 +315,15 @@ def telcos():
     return out
 
 
+def telco_ok(t, kind):
+    """Telco jenis httpupgrade ada pendengar VLESS sahaja kat VPS, jadi VMess dan Trojan tak dapat telco tu."""
+    return kind == "v" or len(t) < 6 or t[5] == "ws"
+
+
+def telco_nama(t):
+    return t[0] + (" (VLESS sahaja)" if len(t) > 5 and t[5] != "ws" else "")
+
+
 def telco_path(kind, p):
     if p == "/vless":
         return {"v": "/vless", "m": "/vmess", "t": "/trojan-ws"}[kind]
@@ -347,7 +356,7 @@ TACT = {"v": "t", "m": "tm", "t": "tt"}
 
 def telco_kb(user, kind="v"):
     act = TACT[kind]
-    b = [btn(t[0], "%s:%s:%d" % (act, user, i + 1)) for i, t in enumerate(telcos())]
+    b = [btn(t[0], "%s:%s:%d" % (act, user, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
     kb = rows(b, 3)
     kb.append([btn("Semua telco", "%s:%s:0" % (act, user)), btn("📝 Nota", "n:%s:%s" % (kind, user))])
     return kb
@@ -1198,9 +1207,9 @@ def on_callback(chat, data):
             send(chat, "Akaun tak jumpa.", MAIN_KB)
             return
         T = telcos()
-        sel = T if n == 0 else T[n - 1:n]
+        sel = [x for x in (T if n == 0 else T[n - 1:n]) if telco_ok(x, kind)]
         if not sel:
-            send(chat, "Telco tak ada.", MAIN_KB)
+            send(chat, "Telco tak ada untuk jenis ni.", MAIN_KB)
             return
         out = ["<b>Akaun %s</b>" % KIND[kind]["nama"]] + acct_info(kind, user, u[2], u[1]) + ["", "<b>Link telco</b>", ""]
         for t in sel:
@@ -1321,7 +1330,7 @@ def trial_cb(chat, frm, data):
         T = telcos()
         J = jual_load()
         b = [btn(("" if telco_status(J, x[0]) == "ok" else TELCO_ST[telco_status(J, x[0])] + " ") + x[0], "pc:%s:%d" % (kind, i + 1))
-             for i, x in enumerate(T) if telco_status(J, x[0]) != "tak"]
+             for i, x in enumerate(T) if telco_status(J, x[0]) != "tak" and telco_ok(x, kind)]
         kb = rows(b, 3) + [[btn("Tanpa telco (link biasa)", "pc:%s:0" % kind)]]
         send(chat, "Pilih telco kau:", kb)
     elif p[0] == "pc" and len(p) == 3 and p[2].isdigit():
@@ -1374,6 +1383,9 @@ def trial_buat(chat, frm, kind, n):
             send(chat, "Telco tak sah. Taip /start.")
             return
         tl = T[n - 1]
+        if not telco_ok(tl, kind):
+            send(chat, "Telco tu tak ada untuk jenis ni. Taip /start.")
+            return
         if telco_status(jual_load(), tl[0]) == "tak":
             send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(tl[0]))
             return
@@ -1617,9 +1629,9 @@ def telco_senarai_pelanggan(J, boleh_trial):
     T = telcos()
     if not T:
         return "Belum ada telco disediakan. Pilih link biasa."
-    ok = [x[0] for x in T if telco_status(J, x[0]) == "ok"]
-    lm = [x[0] for x in T if telco_status(J, x[0]) == "lemah"]
-    tk = [x[0] for x in T if telco_status(J, x[0]) == "tak"]
+    ok = [telco_nama(x) for x in T if telco_status(J, x[0]) == "ok"]
+    lm = [telco_nama(x) for x in T if telco_status(J, x[0]) == "lemah"]
+    tk = [telco_nama(x) for x in T if telco_status(J, x[0]) == "tak"]
     L = ["📶 <b>Telco yang berfungsi</b>", "✅ Berfungsi: %s" % (E(", ".join(ok)) if ok else "tiada")]
     if lm:
         L.append("⚠️ Kadang-kadang / lemah: %s" % E(", ".join(lm)))
@@ -1635,7 +1647,7 @@ def telco_admin_msg(J):
     T = telcos()
     L = ["📶 <b>Status telco</b>  (pelanggan nampak ini)"]
     for i, x in enumerate(T):
-        L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, x[0])], E(x[0])))
+        L.append("%d. %s %s" % (i + 1, TELCO_ST[telco_status(J, x[0])], E(telco_nama(x))))
     if not T:
         L.append("(tiada telco dalam telco.conf)")
     L += ["", "✅ berfungsi   ⚠️ lemah (boleh dipilih, ada amaran)   ❌ tak berfungsi (disorok dari pilihan)",
@@ -1784,7 +1796,7 @@ def jual_miliknya(J, uid):
 
 
 def jual_kb_telco(kind, user):
-    b = [btn(t[0], "kt:%s:%s:%d" % (kind, user, i + 1)) for i, t in enumerate(telcos())]
+    b = [btn(t[0], "kt:%s:%s:%d" % (kind, user, i + 1)) for i, t in enumerate(telcos()) if telco_ok(t, kind)]
     kb = rows(b, 3)
     kb.append([btn("Semua telco", "kt:%s:%s:0" % (kind, user))])
     return kb
@@ -1821,9 +1833,9 @@ def jual_pilih_telco(chat, J, kind):
     b = []
     for i, x in enumerate(T):
         s = telco_status(J, x[0])
-        if s != "tak":
+        if s != "tak" and telco_ok(x, kind):
             b.append(btn("%s %s" % (TELCO_ST[s], x[0]), "kc:%s:%d" % (kind, i + 1)))
-    tk = [x[0] for x in T if telco_status(J, x[0]) == "tak"]
+    tk = [x[0] for x in T if telco_status(J, x[0]) == "tak" and telco_ok(x, kind)]
     teks = ["Pilih telco kau dulu. ✅ berfungsi, ⚠️ kadang-kadang."]
     if tk:
         teks.append("❌ Tak berfungsi sekarang (tak boleh dipilih): %s" % E(", ".join(tk)))
@@ -1867,7 +1879,7 @@ def kedai_cb(chat, frm, data):
     elif k == "kb" and len(p) == 2 and p[1] in TRIAL_KIND:
         if not jual_hidup(J) or p[1] not in J["jenis"]:
             send(chat, "Jualan tak dibuka sekarang.")
-        elif p[1] == "s" or jual_buka(J, uid) or not telcos():
+        elif p[1] == "s" or jual_buka(J, uid) or not [x for x in telcos() if telco_ok(x, p[1])]:
             jual_order_baru(chat, frm, p[1], "baru")
         else:
             jual_pilih_telco(chat, J, p[1])
@@ -1879,6 +1891,10 @@ def kedai_cb(chat, frm, data):
         nama = ""
         if n:
             nama = T2[n - 1][0]
+            if not telco_ok(T2[n - 1], p[1]):
+                send(chat, "Telco %s tak ada untuk jenis ni. Pilih yang lain." % code(nama))
+                jual_pilih_telco(chat, J, p[1])
+                return
             if jual_hidup(J) and telco_status(J, nama) == "tak":
                 send(chat, "Telco %s tak berfungsi sekarang. Pilih yang lain." % code(nama))
                 jual_pilih_telco(chat, J, p[1])
@@ -1907,9 +1923,9 @@ def kedai_cb(chat, frm, data):
             return
         T2 = telcos()
         n = int(p[3])
-        sel = T2 if n == 0 else T2[n - 1:n]
+        sel = [x for x in (T2 if n == 0 else T2[n - 1:n]) if telco_ok(x, p[1])]
         if not sel:
-            send(chat, "Telco tak ada.")
+            send(chat, "Telco tak ada untuk jenis ni.")
             return
         out = ["<b>Akaun %s</b>" % KIND[p[1]]["nama"]] + [l for l in acct_info(p[1], p[2], a[2], a[1]) if not l.startswith("Nota")] + ["", "<b>Link telco</b>", ""]
         for t in sel:
