@@ -1303,6 +1303,7 @@ def _finish(chat, st):
             send(chat, E(err), MAIN_KB)
             return
         send(chat, vhead() + ssh_msg(r["user"], r["pw"], r["exp"], r["ip"]), MAIN_KB)
+        hc_lepas(chat, r["user"], CUR)
     elif flow == "nt":
         kind = d.get("kind", "v")
         u = find(kind, d["user"])
@@ -1689,10 +1690,12 @@ def trial_start(chat, frm, vid=None):
         send(chat, "Server tu tak dibuka sekarang. Taip /start untuk pilih semula.")
         return
     kb = rows([btn("🎁 " + TRIAL_KIND[k], "pt:%s%s" % (k, vtok(vid))) for k in d["jenis"]], 2)
+    nota = hc_nota_jenis(jual_load(), vid, d["jenis"])
     send(chat, "\n".join(["🎁 <b>Trial percuma</b>  ✦ kancil ecem",
                           "Tempoh %s • kuota %s • %d peranti" % (trial_tempoh(d["minit"] * 60), trial_gb(d["kuota"]), d["iplimit"]),
                           "Satu trial setiap %d jam." % d["jam"]] +
-                         (["Server: %s" % E(vps_nama(vid))] if vps_multi() else []) + ["", "Pilih jenis akaun:"]), kb)
+                         (["Server: %s" % E(vps_nama(vid))] if vps_multi() else []) + ([nota] if nota else []) +
+                         ["", "Pilih jenis akaun:"]), kb)
 
 
 def trial_cb(chat, frm, data):
@@ -2052,6 +2055,8 @@ def telco_senarai_pelanggan(J, boleh_trial):
         L.append("❌ Tak berfungsi sekarang: %s" % E(", ".join(tk)))
     if J.get("telco_t"):
         L.append("Dikemas kini: %s" % datetime.datetime.fromtimestamp(J["telco_t"]).strftime("%d-%m-%Y %H:%M"))
+    if any(telco_status(J, n) != "tak" for n in J.get("hc", {})):
+        L += ["", "ℹ️ Telco bertanda <b>(SSH)</b>: pilih jenis <b>SSH</b>. Telco lain: pilih <b>VLESS</b>."]
     L += ["", "Pilih telco kau masa beli." + (" Nak cuba dulu? Guna Trial percuma." if boleh_trial else "")]
     return "\n".join(L)
 
@@ -2265,7 +2270,9 @@ def jual_hantar_akaun(chat, kind, user, kepala, telco="", vid="local", fail=True
 
 
 def jual_pilih_jenis(chat, J, vid):
-    send(chat, "Pilih jenis akaun (%s / %d hari)%s:" % (rm(J["sen"]), J["hari"], (" • server %s" % vps_nama(vid)) if vps_multi() else ""),
+    nota = hc_nota_jenis(J, vid, J["jenis"])
+    send(chat, ((nota + "\n\n") if nota else "") +
+         "Pilih jenis akaun (%s / %d hari)%s:" % (rm(J["sen"]), J["hari"], (" • server %s" % vps_nama(vid)) if vps_multi() else ""),
          rows([btn(TRIAL_KIND[x], "kb:%s%s" % (x, vtok(vid))) for x in J["jenis"]], 2))
 
 
@@ -3096,6 +3103,24 @@ def hc_items(t):
 def hc_boleh(J, vid):
     """Nama telco SSH yang ada fail untuk server vid dan tak ditanda tak berfungsi."""
     return [n for n in sorted(J.get("hc", {})) if vid in hc_vids(J, n) and telco_status(J, n) != "tak"]
+
+
+def hc_nota_jenis(J, vid, jenis):
+    """Nota di skrin pilih jenis akaun: telco yang perlu SSH (fail HTTP Custom) lawan telco lain."""
+    if "s" not in jenis:
+        return ""
+    nm = []
+    for n in hc_boleh(J, vid):
+        for x in (J.get("hc", {}).get(n, {}).get("lbl") or [n]):
+            if x not in nm:
+                nm.append(x)
+    if not nm:
+        return ""
+    lain = "VLESS" if "v" in jenis else next((TRIAL_KIND[x] for x in jenis if x != "s"), "")
+    t = "ℹ️ Telco <b>%s</b>: pilih <b>SSH</b>." % E(", ".join(nm))
+    if lain:
+        t += "\nTelco lain: pilih <b>%s</b>." % lain
+    return t
 
 
 def tg_ambil(file_id):
