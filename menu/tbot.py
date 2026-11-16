@@ -16,6 +16,7 @@ import shutil
 import string
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import unicodedata
@@ -1411,6 +1412,7 @@ def on_command(chat, text):
             "/nota nama [teks] - lihat atau tukar nota akaun VLESS, VMess atau Trojan (0 = padam)",
             "/senarai - semua akaun", "/semak nama", "/renew nama hari", "/padam nama",
             "/status - servis VPS", "/vps - senarai server (VPS) yang disambung ke bot, tukar, tambah, buang",
+            "/speed [ID] - uji kelajuan (ping, download, upload) setiap server",
             "/trial - trial awam untuk orang lain (hidup/tutup, tetapan)",
             "/jual - jualan akaun (bayar QR, sahkan resit, harga, statistik)",
             "/telco - tanda telco mana berfungsi (pelanggan nampak dan pilih sebelum bayar)",
@@ -1440,6 +1442,8 @@ def on_command(chat, text):
         hc_gambar(chat, text)
     elif cmd in ("/vps", "/vpstambah", "/vpsbuang", "/vpspilih", "/vpsnama", "/vpstutup", "/vpsbuka"):
         vps_cmd(chat, cmd, a)
+    elif cmd == "/speed":
+        speed_cmd(chat, a)
     elif cmd == "/senarai":
         send(chat, vhead() + list_msg(), MAIN_KB)
     elif cmd == "/status":
@@ -2984,6 +2988,90 @@ def vps_buang(chat, a):
     vps_save(d)
     DOWN.pop(vid, None)
     send(chat, "✅ Server <b>%s</b> dibuang dari bot.\n%s" % (E(v["nama"]), nota), MAIN_KB)
+
+
+# ---------------------------------------------------------------- /speed: uji kelajuan setiap server
+# Skrip jalan terus kat server (curl ke Cloudflare). Tak pasang apa-apa, tak guna ejen tbot.py. Guna lebih kurang 120 MB data setiap server.
+SPEED_SH = r"""command -v curl >/dev/null 2>&1 || { echo NOCURL; exit 0; }
+c='curl -s -o /dev/null --max-time 10'
+echo "P $($c -w '%{time_connect}' https://speed.cloudflare.com/cdn-cgi/trace)"
+echo "D $($c -w '%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=100000000')"
+f=/tmp/.tbspd.$$
+head -c 20000000 /dev/zero > "$f" 2>/dev/null
+echo "U $($c -X POST --data-binary @"$f" -w '%{speed_upload}' https://speed.cloudflare.com/__up)"
+rm -f "$f"
+"""
+SPEED_LOCK = threading.Lock()
+SPEED_T = None
+
+
+def speed_parse(out):
+    r = {}
+    for l in (out or "").splitlines():
+        m = re.match(r"^([PDU]) ([0-9]+(?:\.[0-9]+)?)$", l.strip())
+        if m:
+            r[m.group(1)] = float(m.group(2))
+    return r
+
+
+def speed_baris(v, rc, out, err):
+    """Satu server -> dua baris laporan (HTML)."""
+    kepala = "🖥 <b>%s</b>  <code>%s</code>" % (E(v["nama"]), E(v["id"]))
+    if rc == 255:
+        return kepala + "\n   ❌ tak dapat sambung: " + E(_ralat_ssh(err))
+    if "NOCURL" in (out or ""):
+        return kepala + "\n   ❌ curl tak ada kat server ni (apt install -y curl)"
+    r = speed_parse(out)
+    if not r:
+        return kepala + "\n   ❌ ujian gagal (kod %d): %s" % (rc, E(_ralat_ssh(err)))
+    ping, dl, ul = r.get("P", 0) * 1000, r.get("D", 0) * 8 / 1e6, r.get("U", 0) * 8 / 1e6
+    if not (ping or dl or ul):
+        return kepala + "\n   ❌ tak dapat capai speed.cloudflare.com (internet server bermasalah atau disekat)"
+    return kepala + "\n   Ping %s • ⬇ %s • ⬆ %s" % (
+        ("%d ms" % round(ping)) if ping else "gagal", ("%.1f Mbps" % dl) if dl else "gagal", ("%.1f Mbps" % ul) if ul else "gagal")
+
+
+def speed_kerja(chat, senarai):
+    try:
+        L = ["⚡ <b>Uji kelajuan server</b>", ""]
+        for v in senarai:
+            try:
+                if v["id"] == "local":
+                    p = subprocess.run(["sh", "-c", SPEED_SH], capture_output=True, timeout=60)
+                    rc, out, err = p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
+                else:
+                    rc, out, err = ssh_run(v, "sh -c " + shlex.quote(SPEED_SH), b"", 60)
+                L.append(speed_baris(v, rc, out, err))
+            except subprocess.TimeoutExpired:
+                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ ujian terlalu lama (lebih 60 saat)" % (E(v["nama"]), E(v["id"])))
+            except VPSError as e:
+                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ %s" % (E(v["nama"]), E(v["id"]), E(str(e))))
+            except Exception as e:
+                log("speed gagal:", e)
+                L.append("🖥 <b>%s</b>  <code>%s</code>\n   ❌ ralat: %s" % (E(v["nama"]), E(v["id"]), E(str(e)[:100])))
+        L += ["", "Ini kelajuan server ke internet (Cloudflare), bukan kelajuan dari telefon kau. Setiap server guna lebih kurang 120 MB data."]
+        send(chat, "\n".join(L))
+    except Exception as e:
+        log("speed gagal:", e)
+    finally:
+        SPEED_LOCK.release()
+
+
+def speed_cmd(chat, a):
+    """/speed [ID]  uji ping, download, upload setiap server (atau satu server)."""
+    global SPEED_T
+    S = vps_semua()
+    if a:
+        S = [v for v in S if v["id"] == a[0].lower()]
+        if not S:
+            send(chat, "Server <code>%s</code> tak jumpa. Taip /vps untuk senarai ID." % E(a[0][:20]))
+            return
+    if not SPEED_LOCK.acquire(blocking=False):
+        send(chat, "Ujian kelajuan lain tengah jalan. Tunggu sekejap.")
+        return
+    send(chat, "⏳ Uji kelajuan %d server, ambil lebih kurang %d saat. Sekejap..." % (len(S), 35 * len(S)))
+    SPEED_T = threading.Thread(target=speed_kerja, args=(chat, S), daemon=True)
+    SPEED_T.start()
 
 
 def vps_cmd(chat, cmd, a):
